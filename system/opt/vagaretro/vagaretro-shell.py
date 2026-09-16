@@ -545,6 +545,11 @@ def load_config(path):
                     cfg[k] = v
     except Exception as e:
         log("读取配置失败（用默认值）: %s" % e)
+
+    # 卡二 ROM 根自动下沉（原因见 _detect_rom2_root）。
+    # 放在 load_config 里、而不是 build_compat_tree 内部，是为了让
+    # 「建软链 / M 行 / 日志」三处拿到的 rom_dir2 永远是同一个值。
+    cfg["rom_dir2"] = _detect_rom2_root(cfg["rom_dir2"])
     return cfg
 
 
@@ -762,6 +767,75 @@ def _resolve_rel(root, rel):
     return cur
 
 
+# ------------------------------------------------ 卡二 ROM 根：自动下沉一层
+# 卡二的挂载点永远是 config.ini 的 rom2_dir（/roms2），但 **ROM 根**会随卡变：
+#
+#   · LANGOS 原卡（2026-09-14 之前用的那张）
+#         /roms2/FC  /roms2/MD  /roms2/fbneo  …        平台目录直接在挂载点下
+#
+#   · 天马 G（Pegasus）卡（2026-09-16 换的）
+#         /roms2/Roms/FC  /roms2/Roms/MD  …            平台目录统一在 Roms/ 下
+#
+# 这个差别不改的话，mode=2（只读卡二）会对每个平台都建一条悬空链接 ——
+# 2026-09-16 实测：换天马卡后 32 个平台**全部 0 个游戏**，整个前端是空的
+# （index.tsv 的 M 行写着 `/roms2 32 0`）。
+#
+# 为什么不干脆把 config.ini 的 rom_dir2 改成 /roms2/Roms：
+# 那样换回原卡就又全空了 —— 用户换卡是常规操作，不该每次手改配置。
+# 所以这里做成**探测式**，两种布局都认。
+#
+# 探测用"这个目录下能不能直接找到至少一个已知平台目录"来判，
+# 认不出就**保持原值不动**（宁可维持现状，也不能把能用的布局猜坏）。
+def _rom2_probe_names():
+    """所有"平台目录可能叫什么名字"的集合（小写）。
+
+    三个来源，正好覆盖候选逻辑里用得到的那三批：
+      · PLATFORM_MAP 的 pid        —— 天马卡用的就是这套（FC/MD/PS1…）
+      · ROM2_DIRNAME 的值（取首段） —— 卡二的目录名特例（PS / fbneo / WS…）
+      · MULTI_SRC 的各子库名        —— 街机那种拆开的（MAME STG / FBNEO ACT…）
+    """
+    names = set()
+    for pid in PLATFORM_MAP:
+        names.add(pid.lower())
+    for rel in ROM2_DIRNAME.values():
+        names.add((rel or "").split("/")[0].lower())
+    for subs in MULTI_SRC.values():
+        for s in subs:
+            names.add((s or "").split("/")[0].lower())
+    names.discard("")
+    return names
+
+
+def _looks_like_rom_root(path):
+    """path 下面能不能直接看到至少一个已知平台目录。"""
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        kids = {e.lower() for e in os.listdir(path)}
+    except OSError:
+        return False
+    return bool(_rom2_probe_names() & kids)
+
+
+def _detect_rom2_root(root):
+    """把卡二 ROM 根从"挂载点"修正到"真正装 ROM 的那一层"。
+
+    规则很短：原值能直接看到平台目录 → 就用原值；看不到 → 试它下面的
+    `Roms` / `roms`（exFAT 大小写不敏感，两个都试以防万一）；还看不到 → 原值。
+    """
+    if not root or not os.path.isdir(root):
+        return root
+    if _looks_like_rom_root(root):
+        return root
+    for sub in ("Roms", "roms", "ROMs"):
+        cand = os.path.join(root, sub)
+        if _looks_like_rom_root(cand):
+            log("卡二 ROM 根自动下沉：%s -> %s（该卡把平台目录放在子目录里）"
+                % (root, cand))
+            return cand
+    return root
+
+
 def build_compat_tree(systems, rom_dir, compat_dir, rom_dir2="", mode="auto"):
     """在 ext4 上建 <compat_dir>/<platform.id> -> <ROM目录> 的软链。
 
@@ -808,7 +882,14 @@ def build_compat_tree(systems, rom_dir, compat_dir, rom_dir2="", mode="auto"):
                 s = _resolve_child(rom_dir2, sub)
                 if os.path.isdir(s):
                     subs.append((sub, s))
-            if subs:
+            # 只有"真的需要合并"才走这条路 —— 判据是：存在**普通流程命中不了**的子目录。
+            # 普通流程的候选里有 pid / pid.lower()，所以只有一个同名声的子目录时
+            # 它自己能找到，不必改成"实体目录 + 一层子软链"。
+            # 这样原卡（只有 FC 一个目录）的行为**逐字不变**，只有天马卡那种
+            # FC + FC hack + FC-HD 才真的合并。
+            need_merge = any(s.lower() not in (pid.lower(),)
+                             for s, _ in subs)
+            if subs and need_merge:
                 try:
                     if os.path.islink(link):
                         os.unlink(link)
@@ -824,8 +905,19 @@ def build_compat_tree(systems, rom_dir, compat_dir, rom_dir2="", mode="auto"):
                         elif os.path.exists(dst):
                             continue
                         os.symlink(s.rstrip("/"), dst)
+                    # 之前合并过的、现在不该有的子链要清掉（换卡之后残留会让
+                    # 列表里混进上一张卡的游戏）。只删软链，不碰实体目录。
+                    keep = {s for s, _ in subs}
+                    try:
+                        for name in os.listdir(link):
+                            if name in keep or not os.path.islink(os.path.join(link, name)):
+                                continue
+                            os.unlink(os.path.join(link, name))
+                            log("兼容目录 %s：清掉多余子链 %s" % (pid, name))
+                    except OSError:
+                        pass
                     resolved[pid] = sysname or pid.lower()
-                    log("兼容目录 %-6s 合并 %d 个街机子库：%s"
+                    log("兼容目录 %-6s 合并 %d 个子库：%s"
                         % (pid, len(subs), ", ".join(x[0] for x in subs)))
                     continue
                 except Exception as e:
@@ -1050,12 +1142,44 @@ COVER_SUBDIRS = ("images", "img", "image",
                  "previews", "media/previews")
 
 # 一个平台要合并多个源目录的情况。前端只有一个「街机 FBNeo」平台，而卡二把
-# 街机 ROM 拆在六个子库里（arcade 832 条 + mame 408 + neogeo 350 + cps1/2/3 122）。
-# 这些靠 compat 目录下建**实体目录 + 多条软链**合起来 —— compat 在 ext4 上，
-# 建软链没问题；前端是递归扫的（ROM_SCAN_DEPTH=3），自然全收。
+# 街机 ROM 拆在多个子库里。这些靠 compat 目录下建**实体目录 + 多条软链**合起来
+# —— compat 在 ext4 上，建软链没问题；前端是递归扫的（ROM_SCAN_DEPTH=3），自然全收。
+#
+# 天马 G（Pegasus）卡（2026-09-16 换的）多出两类目录，也走同一套机制：
+#   ① 改版 / 高清重制版按机种另起目录：FC hack / FC-HD / SFC hack / MD hack /
+#      MD hack(picodrive)。它们**就是**那个机种的游戏（魔改或高清化），
+#      归到基础平台才不会白丢 —— 实测这批共 1052 个 ROM，不合并就一个都看不见。
+#   ② 街机按玩法类型拆：MAME ACT / MAME FTG / FBNEO STG… 共 20 个目录
+#      （MAME 8 个 + FBNEO 12 个）。原卡那 6 个子库（arcade/mame/cps1…）
+#      天马卡上一个都没有，所以那张表对天马卡是空转，必须把新目录名补进来。
+#
+# ⚠ 街机这两套 romset **不通用**：MAME 目录里的 zip 是 MAME 的 romset、
+#   FBNEO 目录里的是 FBNEO 的。合并后统一用 PLATFORM_CORE["ARCADE"]="fbneo"
+#   那个核心去跑，FBNEO 那批稳，MAME 那批能不能过要看具体游戏和版本。
+#   能列出来/能启动一批，比现在"整块街机是空的"强；要精确到"按子目录选核心"，
+#   得等前端支持按 rel 前缀换模拟器（cores.txt 的游戏级覆盖已经支持 rel，
+#   里面带得了 `MAME STG/xxx.zip` 这种前缀）。
 # 说明：只对 mode=auto/2（看得到卡二）生效。
 MULTI_SRC = {
-    "ARCADE": ("arcade", "mame", "neogeo", "cps1", "cps2", "cps3"),
+    "ARCADE": (
+        # ---- LANGOS 原卡（2026-09-14）的六个子库 ----
+        "arcade", "mame", "neogeo", "cps1", "cps2", "cps3",
+        # ---- 天马 G 卡的 MAME 系列（按玩法类型拆）----
+        "MAME ACT", "MAME ETC", "MAME FLY", "MAME FLY V",
+        "MAME FTG", "MAME FTG hack", "MAME STG", "MAME STG V",
+        # ---- 天马 G 卡的 FBNEO 系列 ----
+        "FBNEO ACT", "FBNEO ACT hack", "FBNEO ACT V",
+        "FBNEO ETC", "FBNEO ETC V",
+        "FBNEO FLY", "FBNEO FLY V",
+        "FBNEO FTG", "FBNEO FTG hack",
+        "FBNEO STG", "FBNEO STG hack", "FBNEO STG V",
+    ),
+    # 改版 / 高清版归回本家机种（天马卡）：一共 1052 个 ROM。
+    # 合并后列表里会混进 hack 版游戏 —— 它们本来就是该机种的游戏，
+    # 显示名仍是文件名（_scan_roms 只取 basename），不会被加上目录前缀。
+    "FC":  ("FC", "FC hack", "FC-HD"),
+    "SFC": ("SFC", "SFC hack"),
+    "MD":  ("MD", "MD hack", "MD hack(picodrive)"),
 }
 
 
@@ -1124,33 +1248,247 @@ def _sys_dirname(systems, sysname):
     return os.path.basename(p.rstrip("/"))
 
 
+_MEDIA_INDEX_CACHE = {}
+
+
+def _media_index(root):
+    """<平台目录>/media 下所有子目录名，**集合**（带缓存）。
+
+    两个用处：① 前缀兜底要拿 ROM 名去比**全部** media 目录名（街机一个平台
+    就有 1500 个），② 判断 `media/<名>` 在不在 —— 不在就干脆别去 listdir 它。
+    一次扫、后面全走内存。
+    """
+    c = _MEDIA_INDEX_CACHE.get(root)
+    if c is None:
+        try:
+            c = set(os.listdir(os.path.join(root, "media")))
+        except OSError:
+            c = set()
+        _MEDIA_INDEX_CACHE[root] = c
+    return c
+
+
+def _box_in(d):
+    """目录 d 里的封面文件（真存在才返回）。天马用 boxFront.jpg/png 两种命名。
+
+    ⚠ 这里**只 listdir 一次**、靠返回值判断存在性，不做 `os.path.isfile` 试探。
+      原来的写法要把 6 个候选名各 stat 一遍（街机 1500 个游戏 = 上万次系统
+      调用，exFAT 上每次都是几十毫秒级的抖动）。listdir 一次就把目录里有什么
+      全拿回来了，比对纯内存 —— 实测整个 gen-index 从 49 s 回到 31 s。
+    """
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return ""
+    low = {}
+    for n in names:
+        low.setdefault(n.lower(), n)
+    for fn in ("boxfront.jpg", "boxfront.png", "boxfront.jpeg", "boxfront.webp"):
+        if fn in low:
+            return os.path.join(d, low[fn])
+    # 名字有细微差异时再兜一次：目录下第一个 boxfront*
+    for n in sorted(names):
+        if n.lower().startswith("boxfront"):
+            return os.path.join(d, n)
+    return ""
+
+
+def _pegasus_cover(root, game_name, file_base, front_rel=""):
+    """天马卡的游戏封面路径。三级查找，越靠前越准：
+
+    0) `assets.box_front:` —— pegasus 自己写的**精确路径**（相对平台目录）。
+       不是每条都有（GBA 462 条里只有 6 条带），但带了的就一定对，不用猜。
+    1) `media/<名字>/boxFront.*`
+       ★ 这个 <名字> 到底是 `game:` 还是 `file:`，**两种都有，必须先试 file 的**：
+         · 街机 —— game 是中文（`名将`），media 目录是 romset 名（`captcomm`）
+                   用中文名拼必空（实测 1486 个街机只命中 3 张封面）。
+         · FC-HD —— game 是 `超级马里奥兄弟1 3D版`，media 是 `Super Mario Bros. 3d`
+         · FC / MD / SFC 那些 —— 两者本来就是同一个名字，先试哪个都一样
+    2) 前缀兜底：media 目录名**以 ROM 名开头**。
+       天马的 media 是按**主 romset** 建的，而卡上的 ROM 常是它的变体：
+       `kof98.zip -> media/kof98h/`、`1944.zip -> media/1944j/`、
+       `mslug3 -> mslug3h`、`sfiii -> sfiiin`。这一级专治它们。
+       ⚠ 只做**这个方向**（ROM 名是前缀），不做反向 —— 反向时 "火焰纹章"
+         这种前缀会一口气匹配到几十个游戏，纯属瞎猜。限制：候选不能比原名
+         长出 8 个字符以上，多候选取**最短**的（离原名最近的那个）。
+    """
+    if not root:
+        return ""
+    if front_rel:
+        cand = os.path.normpath(os.path.join(root, front_rel.lstrip("/")))
+        if os.path.isfile(cand):
+            return cand
+    midx = _media_index(root)
+    for nm in (file_base, game_name):
+        if nm and nm in midx:          # 目录不在就别去 listdir 它
+            p = _box_in(os.path.join(root, "media", nm))
+            if p:
+                return p
+    if file_base and len(file_base) >= 4:
+        best = ""
+        lim = len(file_base) + 8
+        for d in midx:
+            if len(d) > lim or not d.startswith(file_base):
+                continue
+            if not best or len(d) < len(best):
+                best = d
+        if best:
+            p = _box_in(os.path.join(root, "media", best))
+            if p:
+                return p
+    return ""
+
+
+def _guess_cover(plat_dir, rel):
+    """最后的兜底：**只拿 ROM 文件名**，去它同级的 media/ 里找封面。
+
+    rel 形如 `FBNEO ACT hack/kov2.zip`（相对 compat 平台目录），所以 media
+    在 `<compat>/ARCADE/FBNEO ACT hack/media/`；FC 那种扁平平台没子目录，
+    直接就在平台目录下找。
+    这条专治"元数据里根本没这个文件"的孤儿 ROM —— 天马卡上一大批
+    （metadata 写 kov2pemp.zip、卡上放 kov2.zip），一条记录都对不上，
+    全靠文件名 + 前缀兜底救回来。
+    """
+    rel = (rel or "").replace("\\", "/")
+    sub = os.path.dirname(rel)
+    root = os.path.join(plat_dir, sub) if sub else plat_dir
+    stem = os.path.splitext(os.path.basename(rel))[0]
+    if not stem:
+        return ""
+    return _pegasus_cover(root, "", stem)
+
+
+def _parse_pegasus_text(text, root, rel_root):
+    """解析天马（Pegasus）的 metadata.pegasus.txt
+       -> {相对 base 的路径: (显示名, 封面绝对路径, 介绍文本)}。
+
+    文件长这样（一个文件里一串 game 块）：
+        collection: FC
+        sort-by: 022
+        extensions: nes, 7z, zip
+        launch: am start --user 0              <- 安卓启动命令，跟 LANGOS 无关
+          -n com.retroarch.aarch64/...
+        game: 重装机兵
+        file: 重装机兵.zip
+        sort-by: 001
+        developer: 重装机兵
+        description: 《重装机兵》……（中文长文）
+    我们只要三样：
+      · `game:`  -> 显示名（天马写的是中文名，比"Castlevania [T+Chi] HD.zip"干净）
+      · `file:`  -> 相对**平台目录**的 ROM 路径，写法跟 _scan_roms 的 name 一致
+      · `description:` -> 游戏介绍（弹层右侧显示用）
+
+    ⚠⚠ **`files:` 是复数、而且是个多行列表**（2026-09-16 修）：
+         game: 恶魔城2 白夜协奏曲BGM替换版2
+         files:
+           白夜BGM重置版2（无描边+披风残影）.zip
+           白夜BGM重置版2（有描边+披风残影）.zip
+           白夜BGM重置版2（原描边+原披风残影）.zip
+         sort-by: 050
+         assets.box_front: media/恶魔城2 白夜协奏曲BGM替换版2/boxFront.png
+       天马把**同一个游戏的好几个版本**列在一条记录里，它们共用显示名和封面。
+       旧的解析器只认单行 `file:`，于是这些 ROM 一个都对不上号 —— 表现为
+       "GBA 有 18 个、街机有一批没封面"。凡是 `键: 空值` 后面跟**缩进行**的
+       都是这种列表（`launch:` / `ignore-files:` 同理），所以这里统一按
+       "缩进行 = 续行" 处理。
+
+    ⚠ `file:` 相对的是 pegasus 自己所在目录，而 key 必须相对 compat 根。
+      合并目录（FC / SFC / MD / ARCADE）下 pegasus 在 <compat>/FC/FC/ 里，
+      所以要补上 rel_root 前缀，否则一个游戏都对不上号（实测会全空）。
+    """
+    out = {}
+    rec = None
+    last = None          # 上一个"可续行"的字段名
+
+    def flush(r):
+        if not r or not r["name"] or not r["files"]:
+            return
+        front = r["front"][0] if r["front"] else ""
+        desc = " ".join(r["desc"]).strip()
+        for f in r["files"]:
+            p = f.replace("\\", "/").lstrip("/")
+            if not p:
+                continue
+            key = ("%s/%s" % (rel_root, p)) if rel_root else p
+            fb = os.path.splitext(os.path.basename(p))[0]
+            out.setdefault(key, (r["name"],
+                                 _pegasus_cover(root, r["name"], fb, front),
+                                 desc))
+
+    for raw in (text or "").splitlines():
+        if not raw.strip():
+            continue
+        if raw[:1] in (" ", "\t"):            # 缩进行 = 上一个列表字段的续行
+            if rec is not None and last:
+                rec[last].append(raw.strip())
+            continue
+        k, sep, v = raw.partition(":")
+        if not sep:
+            last = None
+            continue
+        k = k.strip().lower()
+        v = v.strip()
+        if k == "game":
+            flush(rec)
+            rec = {"name": v, "files": [], "front": [], "desc": []}
+            last = None
+        elif rec is None:
+            continue
+        elif k in ("file", "files"):
+            last = "files"
+            if v:
+                rec["files"].append(v)
+        elif k == "assets.box_front":
+            last = "front"
+            if v:
+                rec["front"].append(v)
+        elif k == "description":
+            last = "desc"
+            if v:
+                rec["desc"].append(v)
+        else:
+            last = None
+    flush(rec)
+    return out
+
+
 def _collect_gamelist_names(base):
-    """递归收集 base 下所有 gamelist.xml 的 {相对路径: (显示名, 封面绝对路径)}。
+    """递归收集 base 下所有 gamelist.xml **和 metadata.pegasus.txt** 的
+    {相对路径: (显示名, 封面绝对路径)}。
 
     key 是**相对 base 的路径**，跟 _scan_roms 产出的 name 是同一套写法，
     所以能直接对上（含 arcade 那种 <path>./CapcomOthers/lwings.zip</path>）。
 
     两个字段一起收：
-      · <name>  —— 卡二写的是中文名，比文件名好认；
-      · <image> —— **封面路径的金矿**。以前只收 name，封面靠"<封面目录>/<文件名>.png"
-        硬猜，于是街机那 825 张（名字带 _screenscraper_mix_arrm 后缀）、PS1 那 26 张
-        （在 previews/ 下）一张都命中不了。gamelist 里本来就写着真名，白不用。
+      · <name> / `game:` —— 卡二写的是中文名，比文件名好认；
+      · <image> / media 约定 —— **封面路径的金矿**。以前只收 name，封面靠
+        "<封面目录>/<文件名>.png" 硬猜，于是街机那 825 张（名字带
+        _screenscraper_mix_arrm 后缀）、PS1 那 26 张（在 previews/ 下）
+        一张都命中不了。gamelist 里本来就写着真名，白不用。
 
     <image> 存**绝对路径**，且只在文件真实存在时才存 —— 前端拿到就能直接开，
     不必再 stat。相对路径是按 gamelist.xml **自己所在目录**算的（嵌套的 gamelist
     写的是同级相对路径，比如 fds/重装机兵/ 下写 "previews/xxx.png"），
     所以基准是 root 而不是 base。
+
+    ---- 2026-09-16 加的第二来源：天马（Pegasus）卡 ----
+    那张卡（用户换的"天马前端游戏卡"）不写 gamelist.xml，只有
+    `metadata.pegasus.txt`。实测整张卡 5500+ 游戏、43 个平台目录，
+    一个 gamelist.xml 都没有 —— 不认这个格式就等于"名字只能是文件名、封面全空"。
+    两种文件并存时**以 gamelist.xml 为准**（它是 LANGOS 自己那套，
+    天马卡上没有；反过来天马卡上也没有 gamelist），所以 pegasus 用 setdefault。
     """
     out = {}
     try:
         import xml.etree.ElementTree as ET
     except Exception:
-        return out
+        ET = None
     base = base.rstrip("/")
     # ⚠ followlinks=True 是必须的：ARCADE 那种"合并目录"是**实体目录 + 各子库软链**，
     #   而 os.walk 默认**不跟随符号链接目录** —— 不打开这个开关就进不去
     #   compat/ARCADE/arcade/，那 mame/neogeo/cps* 的 gamelist.xml 一个都读不到，
     #   街机那 1600 多个游戏就全是文件名当显示名（实测踩过）。
+    #   同理 FC 合并了 FC hack / FC-HD，不跟随就只剩主目录。
     for root, dirs, files in os.walk(base, followlinks=True):
         depth = root[len(base):].count(os.sep)
         # 剪枝：ROM_SKIP_DIRS 里全是封面/视频这类大目录，进去纯浪费时间
@@ -1158,37 +1496,53 @@ def _collect_gamelist_names(base):
                    if x.lower() not in ROM_SKIP_DIRS and not x.startswith(".")]
         if depth >= 2:
             dirs[:] = []
-        if "gamelist.xml" not in files:
-            continue
-        fp = os.path.join(root, "gamelist.xml")
-        try:
-            tree = ET.parse(fp)
-        except Exception as e:
-            log("解析 %s 失败: %s" % (fp, e))
-            continue
+
         rel_root = os.path.relpath(root, base)
         rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
-        for g in tree.getroot().findall("game"):
-            p = (g.findtext("path") or "").strip()
-            if not p:
-                continue
-            nm = (g.findtext("name") or "").strip()
-            im = (g.findtext("image") or "").strip()
-            if not nm and not im:
-                continue
-            if p.startswith("./"):
-                p = p[2:]
-            p = p.lstrip("/")
-            key = ("%s/%s" % (rel_root, p)) if rel_root else p
 
-            img_abs = ""
-            if im:
-                if im.startswith("./"):
-                    im = im[2:]
-                cand = os.path.normpath(os.path.join(root, im.lstrip("/")))
-                if os.path.isfile(cand):
-                    img_abs = cand
-            out[key] = (nm, img_abs)
+        # ---- 来源 1：gamelist.xml ----
+        if "gamelist.xml" in files and ET is not None:
+            fp = os.path.join(root, "gamelist.xml")
+            try:
+                tree = ET.parse(fp)
+            except Exception as e:
+                log("解析 %s 失败: %s" % (fp, e))
+                tree = None
+            if tree is not None:
+                for g in tree.getroot().findall("game"):
+                    p = (g.findtext("path") or "").strip()
+                    if not p:
+                        continue
+                    nm = (g.findtext("name") or "").strip()
+                    im = (g.findtext("image") or "").strip()
+                    if not nm and not im:
+                        continue
+                    if p.startswith("./"):
+                        p = p[2:]
+                    p = p.lstrip("/")
+                    key = ("%s/%s" % (rel_root, p)) if rel_root else p
+
+                    img_abs = ""
+                    if im:
+                        if im.startswith("./"):
+                            im = im[2:]
+                        cand = os.path.normpath(os.path.join(root, im.lstrip("/")))
+                        if os.path.isfile(cand):
+                            img_abs = cand
+                    out[key] = (nm, img_abs, "")
+
+        # ---- 来源 2：metadata.pegasus.txt（天马卡）----
+        if "metadata.pegasus.txt" in files:
+            fp = os.path.join(root, "metadata.pegasus.txt")
+            try:
+                with open(fp, "r", encoding="utf-8", errors="replace") as fh:
+                    txt = fh.read()
+            except OSError as e:
+                log("读 %s 失败: %s" % (fp, e))
+                txt = ""
+            if txt:
+                for key, val in _parse_pegasus_text(txt, root, rel_root).items():
+                    out.setdefault(key, val)
     return out
 
 
@@ -1301,16 +1655,22 @@ def prescan(compat_dir, resolved, systems=None):
             # 显示名以 gamelist.xml 的 <name> 为准（卡二那边写的是中文名，
             # 如 "Y 翼人[YR]"，比文件名好认）。gamelist 里没列的 ROM 保持文件名。
             gm = _collect_gamelist_names(d)
-            if gm:
-                for e in entries:
-                    got = gm.get(e["name"])
-                    if not got:
-                        continue
-                    nm, im = got
+            for e in entries:
+                got = gm.get(e["name"]) if gm else None
+                if got:
+                    nm, im, dc = got
                     if nm:
                         e["title"] = nm      # 中文显示名
                     if im:
                         e["img"] = im        # 封面绝对路径（已验证存在）
+                    if dc:
+                        e["desc"] = dc       # 天马的 description：弹层右侧介绍
+                # 元数据完全没提到这个 ROM 时还有最后一手：拿文件名去同级的
+                # media/ 里找（精确 + 前缀兜底）。天马卡上有一批这种"孤儿"——
+                # metadata 里写的是 kov2pemp.zip，卡上实际放的是 kov2.zip，
+                # 一条记录都对不上，纯靠文件名才救得回来（实测 83 个）。
+                if not e.get("img"):
+                    e["img"] = _guess_cover(d, e["name"])
             dirs[d] = entries
             total += len(entries)
         except Exception as e:
@@ -1390,6 +1750,12 @@ def write_index(cfg, dirs, systems=None, out_path=None):
     meta = vg_platforms.by_pid()
     lines = []
     n_plat = n_game = n_img = n_gal = n_core = 0
+    # 游戏介绍（天马的 description）落到 <索引目录>/desc/<pid>.txt：
+    # **第 i 行 = 该平台第 i 个游戏**，没介绍的写空行保持行号对齐（前端按
+    # 游戏序号直接跳到那一行）。不塞进索引是因为一条描述动辄上千字、全库能到
+    # 好几 MB，而前端只有**打开弹层**时才会去看它。
+    desc_dir = os.path.join(os.path.dirname(out_path), "desc")
+    n_desc = 0
 
     for pid, md in meta.items():
         # 封面目录：<平台真实目录>/images。realpath 是为了穿过 compat_dir 那层软链，
@@ -1422,7 +1788,24 @@ def write_index(cfg, dirs, systems=None, out_path=None):
             lines.append("C\t%s\t%s" % (_tsv_clean(pid), _tsv_clean(cand)))
             if cand:
                 n_core += 1
-        for e in games.get(pid, ()):
+        pentries = games.get(pid, ())
+        if any(x.get("desc") for x in pentries):
+            try:
+                if not os.path.isdir(desc_dir):
+                    os.makedirs(desc_dir, exist_ok=True)
+                dp = os.path.join(desc_dir, pid + ".txt")
+                with open(dp + ".tmp", "w", encoding="utf-8",
+                          newline="\n") as fh:
+                    for x in pentries:
+                        t = (x.get("desc") or "").replace("\r", " ")
+                        t = t.replace("\n", " ").replace("\t", " ")
+                        fh.write(t[:1000] + "\n")
+                os.replace(dp + ".tmp", dp)
+                n_desc += 1
+            except Exception as e:
+                log("写 %s 的游戏介绍失败: %s" % (pid, e))
+
+        for e in pentries:
             # 第 4 列 = gamelist.xml 的 <image> 绝对路径（没有就空串）。
             # 这是封面的**首选来源**，前端拿不到才退回按文件名猜。
             lines.append("G\t%s\t%s\t%s" % (_tsv_clean(e["title"]),
@@ -1447,9 +1830,9 @@ def write_index(cfg, dirs, systems=None, out_path=None):
         fh.write("\n")
     os.replace(tmp, out_path)
 
-    log("索引已写出：%s（%d 平台 / %d 游戏 / %d 带 gamelist 封面 / "
-        "%d 个平台带封面目录 / %d 个平台可换核心 / %.0f KB）"
-        % (out_path, n_plat, n_game, n_gal, n_img, n_core,
+    log("索引已写出：%s（%d 平台 / %d 游戏 / %d 带封面 / "
+        "%d 个平台带封面目录 / %d 个平台可换核心 / %d 个平台带游戏介绍 / %.0f KB）"
+        % (out_path, n_plat, n_game, n_gal, n_img, n_core, n_desc,
            os.path.getsize(out_path) / 1024.0))
     return n_plat, n_game
 

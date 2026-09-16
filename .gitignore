@@ -19,6 +19,10 @@ out/
 tmp/
 dist/
 
+# ---- Python 缓存（改完 .py 都会生成，别混进提交）----
+__pycache__/
+*.pyc
+
 # ---- 编辑器 / 系统垃圾 ----
 .vscode/
 .idea/

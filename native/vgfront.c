@@ -975,6 +975,7 @@ static const struct { const char *zh, *en; } TR[] = {
     { "同人", "Homebrew" },
     { "收藏", "Favorites" },
     { "历史", "History" },
+    { "暂无介绍", "No description" },
     { "全部机种", "All systems" },
     { "任天堂机种", "Nintendo systems" },
     { "世嘉机种", "Sega systems" },
@@ -2689,8 +2690,13 @@ static SDL_Texture *corner_mask(SDL_Renderer *ren, int r, Uint32 bg)
     return g_cn_tex;
 }
 
-/* 按 object-fit:cover 把封面铺进 cv，然后把四角裁回圆角。
-   clip 是当前的视口裁剪框 —— 卡片可能上下各露出一半，不能画到视口外。 */
+/* 把封面**拉满**整个 cv（非等比拉伸），然后把四角裁回圆角。
+   clip 是当前的视口裁剪框 —— 卡片可能上下各露出一半，不能画到视口外。
+
+   ★ 2026-09-16 用户选的是"拉满变形"：原来是 object-fit:cover（等比放大到
+     填满、多出来的边缘切掉），横版街机封面塞进 3:4 的框里左右会被切掉一大
+     截、竖版封面则被切上下。现在直接拉伸到刚好盖住 cv —— **整张图一定看全**，
+     代价是比例失真（横图被压扁、竖图被拉长），这是刻意换来的。 */
 static void draw_cover_fit(SDL_Texture *cov, int iw, int ih,
                            SDL_Rect cv, int r, Uint32 bg, SDL_Rect clip)
 {
@@ -2699,14 +2705,8 @@ static void draw_cover_fit(SDL_Texture *cov, int iw, int ih,
 
     SDL_RenderSetClipRect(REN, &inter);
 
-    /* cover = 等比放大到**铺满**，多出来的裁掉（不是拉伸变形） */
-    float sx = (float)cv.w / (float)iw, sy = (float)cv.h / (float)ih;
-    float k  = sx > sy ? sx : sy;
-    int dw = (int)(iw * k + 0.5f), dh = (int)(ih * k + 0.5f);
-
-    SDL_Rect src = { 0, 0, iw, ih };
-    SDL_Rect dst = { cv.x + (cv.w - dw) / 2, cv.y + (cv.h - dh) / 2, dw, dh };
-    SDL_RenderCopy(REN, cov, &src, &dst);
+    (void)iw; (void)ih;                    /* 拉满就不需要原图尺寸了 */
+    SDL_RenderCopy(REN, cov, NULL, &cv);
 
     SDL_Texture *m = corner_mask(REN, r, bg);
     if (m) {
@@ -9659,6 +9659,153 @@ static int act_key(SDL_Keycode k)
     return 1;
 }
 
+/* ---- 游戏介绍（弹层右侧那块，用户 2026-09-16）--------------------------
+ * 数据是宿主写的 <索引目录>/desc/<pid>.txt：**第 N 行 = 该平台第 N 个游戏**，
+ * 没介绍的游戏是空行（见 vagaretro-shell.py 的 write_index）。天马卡上就是
+ * metadata.pegasus.txt 的 `description:` 字段（中文长文，常用字面 `\n` 断行）。
+ *
+ * 为什么不塞进 index.tsv：一条描述动辄上千字，全库好几 MB，而只有**打开
+ * 弹层**时才需要看它 —— 按需读一行的代价可以忽略，索引也能保持小巧。
+ * 目录名由 main() 从 argv[1] 的索引路径推导（换成 --index 也跟得上）。
+ * ---------------------------------------------------------------------- */
+static char g_desc_dir[288] = "/opt/vagaretro/desc";
+static char g_desc_buf[1600];
+static int  g_desc_pi = -1;
+static int  g_desc_gi = -1;
+
+/* 取第 gi 个游戏的介绍（带一级缓存：同一个游戏反复画不重复读盘）。 */
+static const char *game_desc(const Platform *p, int gi)
+{
+    int pi = (int)(p - IX.p);
+    if (pi == g_desc_pi && gi == g_desc_gi) return g_desc_buf;
+
+    g_desc_pi = pi;
+    g_desc_gi = gi;
+    g_desc_buf[0] = '\0';
+    if (!g_desc_dir[0]) return g_desc_buf;
+
+    char path[380];
+    snprintf(path, sizeof(path), "%s/%s.txt", g_desc_dir, p->pid);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return g_desc_buf;                 /* 原卡没有 desc 目录 —— 正常 */
+
+    char line[1800];
+    int  n = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (n++ == gi) {
+            size_t L = strlen(line);
+            while (L && (line[L - 1] == '\n' || line[L - 1] == '\r'))
+                line[--L] = '\0';
+            snprintf(g_desc_buf, sizeof(g_desc_buf), "%s", line);
+            break;
+        }
+    }
+    fclose(f);
+    return g_desc_buf;
+}
+
+/* 这个平台**有没有**介绍文件。布局拿它当开关，为的是让面板宽度**稳定**：
+   同一平台里某条游戏恰好没描述时，不该让整个弹层忽宽忽窄（右栏显示
+   "暂无介绍"就行）。原卡上压根没有 desc/ 目录 → 永远走单栏老版式。 */
+static int desc_avail(const Platform *p)
+{
+    static char cpid[80] = "";
+    static int  cval = 0;
+    if (cpid[0] && strcmp(cpid, p->pid) == 0) return cval;
+
+    snprintf(cpid, sizeof(cpid), "%s", p->pid);
+    cval = 0;
+    char path[380];
+    snprintf(path, sizeof(path), "%s/%s.txt", g_desc_dir, p->pid);
+    FILE *f = fopen(path, "r");
+    if (f) { cval = 1; fclose(f); }
+    return cval;
+}
+
+/* 自动折行画一段文本，最多画 maxh 高；放不下的末行截断补 "…"。
+   中文逐字断（TTF_SizeUTF8 量出来的就是 UTF-8 字符宽度），够用。
+   ⚠ 天马把换行写成**字面** `\n`（反斜杠 + n，不是真换行），一并当换行处理。 */
+static void draw_para(TTF_Font *f, const char *s, int x, int y,
+                      int w, int maxh, Uint32 col)
+{
+    if (!f || !s || !*s || w <= 0 || maxh <= 0) return;
+    int lh = TTF_FontLineSkip(f);
+    if (lh <= 0) lh = 24;
+    int maxl = maxh / lh;
+    if (maxl < 1) maxl = 1;
+
+    static char line[1200];
+    int ln = 0, li = 0;
+    int tw = 0, th = 0;
+    const char *q = s;
+    line[0] = '\0';
+
+    for (;;) {
+        int brk = 0, adv = 1;
+
+        if (!*q) {
+            brk = 1;
+        } else if (q[0] == '\\' && q[1] == 'n') {
+            brk = 1; adv = 2;
+        } else if (q[0] == '\n' || q[0] == '\r') {
+            brk = 1; adv = 1;
+        } else {
+            int cl = 1;
+            while (q[cl] && ((unsigned char)q[cl] & 0xC0) == 0x80) cl++;
+            if (ln + cl >= (int)sizeof(line) - 1) {
+                brk = 1; adv = 0;              /* 缓冲满了，换行重来 */
+            } else {
+                memcpy(line + ln, q, cl);
+                ln += cl;
+                line[ln] = '\0';
+                tw = 0;
+                TTF_SizeUTF8(f, line, &tw, &th);
+                if (tw > w && ln > cl) {       /* 这一行装不下了 */
+                    ln -= cl;
+                    line[ln] = '\0';
+                    brk = 1; adv = 0;          /* 这个字留到下一行 */
+                } else {
+                    adv = cl;
+                }
+            }
+        }
+
+        if (brk) {
+            int lw = 0, lhh = 0;
+            if (li >= maxl) {                  /* 画满 —— 末行必须带 "…" */
+                char fit[1200];
+                int ew = 0, eh = 0;
+                if (TTF_SizeUTF8(f, "…", &ew, &eh) != 0) ew = 0;
+                /* 先按"留出省略号的位置"截、再把省略号拼上去。
+                   ⚠ 不能直接拿 line 去调 ellipsize —— line 本来就是"还没超宽"
+                     的那一截，ellipsize 见它装得下会原样返回、一个省略号都不
+                     加，用户就以为介绍到这儿就完了（第一版就是这样）。 */
+                ellipsize(f, line, w - ew, fit, sizeof(fit));
+                size_t fl = strlen(fit);
+                /* ellipsize 自己就可能补过一个 "…"，别补成 "……" */
+                int has_ell = (fl >= 3 &&
+                               (unsigned char)fit[fl - 3] == 0xE2 &&
+                               (unsigned char)fit[fl - 2] == 0x80 &&
+                               (unsigned char)fit[fl - 1] == 0xA6);
+                if (!has_ell && fl + 4 < sizeof(fit)) strcat(fit, "…");
+                if (fit[0] && TTF_SizeUTF8(f, fit, &lw, &lhh) == 0)
+                    blit(REN, bake_cached(REN, f, fit, col, &lw, &lhh),
+                         x, y + li * lh, lw, lhh);
+                break;
+            }
+            if (line[0] && TTF_SizeUTF8(f, line, &lw, &lhh) == 0)
+                blit(REN, bake_cached(REN, f, line, col, &lw, &lhh),
+                     x, y + li * lh, lw, lhh);
+            li++;
+            ln = 0;
+            line[0] = '\0';
+            if (!*q) break;
+        }
+        q += adv;
+    }
+}
+
 /* 玻璃拟态弹层。背景用 glass_panel() —— 那是设置页同一套**真·背景模糊**
    （读像素 → 1/4 降采样 → 两次盒式模糊），不是半透明色块。 */
 static void draw_act_popup(void)
@@ -9766,6 +9913,27 @@ static void draw_act_popup(void)
     int wmax = g_win_w - S(72);
     if (w > wmax) w = wmax;
 
+    /* ---- 右侧游戏介绍（用户 2026-09-16）--------------------------------
+       有介绍才变两栏：左栏就是原来那块菜单（宽度 w 一点不改），右栏放介绍，
+       总宽 = 左栏 + 间隙 + 右栏 + 两侧内边距。
+       ★ 没介绍的卡（原卡上根本没有 pegasus 元数据）**保持单栏**，宽度和
+         布局跟以前逐像素一致 —— 这个功能是新卡专用，不能动老卡的观感。
+       挤不出 260px 就不显示（比硬塞一条每行三个字的窄条好看）。 */
+    const char *desc = game_desc(p, g_act_gi);
+    int wl = w;                       /* 左栏（菜单）宽度 */
+    int wr = 0;                       /* 右栏（介绍）宽度 */
+    if (desc_avail(p)) {
+        const int dgap = S(28);
+        const int dpad = PADX * 2;
+        /* ⚠ S() 是**设计像素 → 实际像素**的缩放（本机 ≈0.49），不是像素值：
+           这里写 S(720) 落地才 ≈350px。第一版写了 S(360)、只有 176px 宽，
+           一行才 12 个汉字，读起来像条竖着的电报（截图核对时发现的）。 */
+        wr = S(720);
+        if (wl + dgap + wr + dpad > wmax) wr = wmax - wl - dgap - dpad;
+        if (wr >= S(260)) w = wl + dgap + wr + dpad;
+        else              wr = 0;
+    }
+
     /* ---- 定高：每一段都按量出来的字高累加，不再有"魔法高度" ----
        ★ 2026-09-16 加了「加载存档 / 保存存档」之后项目从 6 条涨到 8 条，
          原来那句 "h 超了就一刀切到屏幕内" 会**把最后两行连底部提示一起裁掉**
@@ -9815,10 +9983,10 @@ static void draw_act_popup(void)
     setc(REN, C_LINE, 150);
     SDL_RenderFillRect(REN, &sep);
 
-    /* --- 三项 --- */
+    /* --- 那一列菜单项（宽度用 wl，两栏时不会压到右边的介绍）--- */
     int y = rc.y + head_h;
     for (int i = 0; i < ACT_N; i++) {
-        SDL_Rect row = { rc.x + ROWIN, y, w - ROWIN * 2, row_in };
+        SDL_Rect row = { rc.x + ROWIN, y, wl - ROWIN * 2, row_in };
         int on     = (i == g_act_sel);
         int danger = (i == ACT_DEL);
 
@@ -9890,6 +10058,22 @@ static void draw_act_popup(void)
                  row.x + row.w - VBR - vw, row.y + (row.h - vh) / 2, vw, vh);
         }
         y += row_h;
+    }
+
+    /* --- 右栏：游戏介绍 ---
+       竖分隔线跟标题下那条横线同一套颜色/透明度，两栏才像"一体的面板"。
+       文字用 draw_para 自动折行、画满就截断，所以永远不会溢出面板。 */
+    if (wr > 0) {
+        int bx = rc.x + PADX + wl + S(28);
+        int by = rc.y + head_h;
+        int bh = h - head_h - foot_h;
+
+        SDL_Rect vl = { bx - S(14), by + S(6), 1, bh - S(12) };
+        setc(REN, C_LINE, 110);
+        SDL_RenderFillRect(REN, &vl);
+
+        draw_para(F_SETV, (desc && desc[0]) ? desc : "暂无介绍",
+                  bx, by + S(8), wr, bh - S(16), C_SUBTEXT);
     }
 
     /* --- 底部按键提示 --- */
@@ -11079,6 +11263,20 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
 
     const char *idx_path = (argc > 1) ? argv[1] : "/opt/vagaretro/index.tsv";
+
+    /* 游戏介绍目录 = 索引文件**同级**的 desc/（宿主 write_index 写在那儿，
+       见 vagaretro-shell.py）。从 argv[1] 推、不写死，换索引路径也跟得上。 */
+    {
+        const char *sl = strrchr(idx_path, '/');
+        if (sl && (int)(sl - idx_path) < (int)sizeof(g_desc_dir) - 8) {
+            int n = (int)(sl - idx_path);
+            memcpy(g_desc_dir, idx_path, n);
+            g_desc_dir[n] = '\0';
+            strncat(g_desc_dir, "/desc",
+                    sizeof(g_desc_dir) - strlen(g_desc_dir) - 1);
+        }
+    }
+
     int max_frames = (argc > 2) ? atoi(argv[2]) : 0;   /* 调试用：跑 N 帧就退 */
     int shot_frame = (argc > 3) ? atoi(argv[3]) : 0;   /* 调试用：第 N 帧存 BMP */
 
