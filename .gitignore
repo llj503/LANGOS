@@ -1,0 +1,28 @@
+# ---- 编译产物（只忽略源目录里的，别误伤 prebuilt/）----
+/native/vgfront
+/native/vgfront-new
+/native/vgfront.*.new
+/boot/vgboot
+/boot/vgboot-new
+*.o
+*.a
+*.d
+
+# ---- 设备抓屏裸帧与运行日志 ----
+*.raw
+*.log
+*.out
+
+# ---- 构建 / 临时目录 ----
+build/
+out/
+tmp/
+dist/
+
+# ---- 编辑器 / 系统垃圾 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*~
+*.swp

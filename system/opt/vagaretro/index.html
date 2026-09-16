@@ -1,0 +1,2251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LANGOS</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+}
+
+:root {
+    --bg: #0a0e1a;
+    --bg2: #0d1322;
+    --panel: #121a30;
+    --panel2: #18213c;
+    --accent: #4f8cff;
+    --accent2: #35e0b0;
+    --gold: #ffc24d;
+    --danger: #ff5b6a;
+    --ok: #43d17c;
+    --text: #eaf0fb;
+    --subtext: #8e99b4;
+    --dim: #5f6b87;
+    --line: #22304f;
+    --line2: #2c3d63;
+}
+
+body {
+    width: 100vw;
+    height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    overflow: hidden;
+    position: relative;
+    margin: 0;
+    padding: 0;
+}
+
+/* 设计尺寸容器 */
+.design-container {
+    width: 1920px;
+    height: 1080px;
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: top left;
+    overflow: hidden;
+}
+
+/* 背景渐变 */
+body::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+        radial-gradient(ellipse at 20% 0%, rgba(79, 140, 255, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 100%, rgba(53, 224, 176, 0.06) 0%, transparent 50%);
+    pointer-events: none;
+}
+
+/* 主容器 */
+.app {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    z-index: 1;
+}
+
+/* 顶部栏 */
+.topbar {
+    display: flex;
+    align-items: center;
+    padding: 30px 48px 32px 48px;
+    flex-shrink: 0;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.logo-text {
+    font-size: 48px;
+    font-weight: bold;
+    background: linear-gradient(90deg, #6a9fff 0%, #35e0b0 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.searchbox {
+    flex: 1;
+    max-width: 520px;
+    margin: 0 auto;
+    height: 60px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    gap: 14px;
+    color: var(--dim);
+    font-size: 24px;
+}
+
+.searchbox svg {
+    width: 26px;
+    height: 26px;
+    fill: var(--dim);
+}
+
+.status {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    color: var(--subtext);
+    font-size: 24px;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.status-icon {
+    width: 28px;
+    height: 28px;
+    color: var(--subtext);
+    opacity: 0.8;
+}
+
+.time {
+    text-align: right;
+}
+
+.time-main {
+    font-size: 44px;
+    font-weight: bold;
+    color: var(--text);
+    line-height: 1;
+}
+
+.time-sub {
+    font-size: 18px;
+    color: var(--subtext);
+    margin-top: 2px;
+}
+
+/* 分类标签栏 */
+.cat-tabs {
+    display: flex;
+    gap: 20px;
+    padding: 0 48px 16px 48px;
+    flex-shrink: 0;
+}
+
+.cat-tab {
+    padding: 16px 36px;
+    border-radius: 28px;
+    font-size: 26px;
+    color: var(--subtext);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.cat-tab.active {
+    background: linear-gradient(90deg, #4f8cff 0%, #3a6fd6 100%);
+    color: white;
+    font-weight: bold;
+    border-color: transparent;
+}
+
+/* 页签右边的数量：由 JS 实算填进来 */
+.cat-tab b {
+    font-size: 20px;
+    font-weight: normal;
+    opacity: 0.6;
+    margin-left: 8px;
+}
+
+/* 标题区域 */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 48px 24px 48px;
+    flex-shrink: 0;
+}
+
+.header-left h1 {
+    font-size: 56px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 10px;
+}
+
+.header-left p {
+    font-size: 24px;
+    color: var(--subtext);
+}
+
+/* 内容区域 */
+.content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 40px 100px 40px;
+}
+
+.content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.content::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 4px;
+}
+
+/* 平台卡片网格。
+   3 列而不是原来的 4 列（用户 2026-09-14："主页改成一排三个，现在太小"）。
+   1024 宽的屏上 3 列卡片宽 300px，比 4 列的 219px 舒服得多。
+   ⚠ 改列数要同步 handleNavigation 里 pageHome 那段的方向键 cols，
+   否则按上下会跳错行。 */
+.platform-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 22px;
+}
+
+.platform-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    contain: layout style;
+    position: relative;
+}
+
+.platform-card:focus,
+.platform-card.active {
+    border-color: var(--accent);
+    border-width: 3px;
+    box-shadow: 0 0 20px rgba(79, 140, 255, 0.3);
+}
+
+.platform-art {
+    height: 170px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding-left: 28px;
+    overflow: hidden;
+}
+
+.platform-art::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.15) 0%, transparent 60%);
+}
+
+.platform-logo {
+    font-size: 64px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    z-index: 1;
+}
+
+.platform-count {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: rgba(0,0,0,0.55);
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 6px 14px;
+    border-radius: 16px;
+    z-index: 2;
+}
+
+.platform-tag {
+    position: absolute;
+    bottom: 14px;
+    left: 14px;
+    background: rgba(0,0,0,0.5);
+    color: white;
+    font-size: 14px;
+    padding: 5px 12px;
+    border-radius: 12px;
+    z-index: 2;
+}
+
+.platform-meta {
+    padding: 20px 24px 22px 24px;
+}
+
+.platform-name {
+    font-size: 23px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.platform-sub-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.platform-sub {
+    font-size: 16px;
+    color: var(--dim);
+}
+
+.platform-core {
+    display: inline-block;
+    font-size: 15px;
+    color: var(--accent2);
+    background: rgba(53, 224, 176, 0.12);
+    padding: 4px 11px;
+    border-radius: 8px;
+}
+
+/* 平台颜色 */
+.color-history { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+.color-favorite { background: linear-gradient(135deg, #f6d365 0%, #fda085 100%); }
+.color-fc { background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); }
+.color-sfc { background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); }
+.color-gb { background: linear-gradient(135deg, #27ae60 0%, #1e8449 100%); }
+.color-gbc { background: linear-gradient(135deg, #1abc9c 0%, #16a085 100%); }
+.color-gba { background: linear-gradient(135deg, #2980b9 0%, #1f618d 100%); }
+.color-n64 { background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%); }
+.color-ngc { background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); }
+.color-wii { background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%); }
+.color-md { background: linear-gradient(135deg, #e67e22 0%, #d35400 100%); }
+.color-ss { background: linear-gradient(135deg, #1abc9c 0%, #16a085 100%); }
+.color-dc { background: linear-gradient(135deg, #ecf0f1 0%, #bdc3c7 100%); }
+.color-ps { background: linear-gradient(135deg, #34495e 0%, #2c3e50 100%); }
+.color-ps2 { background: linear-gradient(135deg, #2c3e50 0%, #1a252f 100%); }
+.color-psp { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+.color-xbox { background: linear-gradient(135deg, #107c10 0%, #0e6b0e 100%); }
+.color-arcade { background: linear-gradient(135deg, #e74c3c 0%, #922b21 100%); }
+.color-neogeo { background: linear-gradient(135deg, #f39c12 0%, #d68910 100%); }
+/* 卡二（TF2）上新增的那批平台 */
+.color-atari { background: linear-gradient(135deg, #d35400 0%, #87421f 100%); }
+.color-gw { background: linear-gradient(135deg, #fdcb6e 0%, #e17055 100%); }
+.color-pico { background: linear-gradient(135deg, #e84393 0%, #c2185b 100%); }
+.color-ports { background: linear-gradient(135deg, #00b894 0%, #00795f 100%); }
+.color-openbor { background: linear-gradient(135deg, #8e44ad 0%, #5b2c6f 100%); }
+.color-j2me { background: linear-gradient(135deg, #f39c12 0%, #d68910 100%); }
+
+/* 游戏列表 */
+.game-header {
+    margin-bottom: 24px;
+}
+
+.game-header h1 {
+    font-size: 40px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.game-header .info {
+    font-size: 15px;
+    color: var(--subtext);
+    display: flex;
+    gap: 20px;
+}
+
+.game-header .info span {
+    color: var(--dim);
+}
+
+.game-grid {
+    /* 早先是单个 display:grid，3763 张卡全在同一个网格里 —— 每次追加一片，
+       WebKit 都要把整个网格重新排一遍，越往下滚越慢。
+       现在改成"一个片 = 一个独立 grid 容器"：追加新片只影响它自己。
+       （WebKit 2.28 不支持 CSS contain，所以靠"分容器"这个结构来隔离布局） */
+    display: block;
+}
+
+.game-chunk {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+}
+
+.game-chunk + .game-chunk {
+    margin-top: 16px;
+}
+
+.game-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    cursor: pointer;
+    /* 只过渡会真的变的两个属性。原来写 `all` —— WebKit 会给每个新插入的
+       元素都挂上全属性过渡的跟踪，上千张卡时是纯浪费 */
+    transition: border-color 0.2s, box-shadow 0.2s;
+    /* 把每张卡的布局/样式隔离掉，改一张不会牵动整个网格重排。
+       （WebKit 2.28 不认 contain，留着是为了以后换宿主时自动生效） */
+    contain: layout style;
+    /* 高度必须写死。WebKit 2.28 不支持 aspect-ratio（Safari 15 才有），
+       原来那行 aspect-ratio:3/4 一直是空转 —— 卡片高度实际被封面图自身的
+       尺寸撑出来，等于"每张图解码完都要整个网格重排一次"。
+       现在由 syncCardMetrics() 按网格真实宽度算出 3:4 的高度写进 --card-h，
+       布局与图片加载彻底解耦。 */
+    height: var(--card-h, 180px);
+}
+
+.game-card:focus,
+.game-card.active {
+    border-color: var(--accent);
+    border-width: 3px;
+    box-shadow: 0 0 20px rgba(79, 140, 255, 0.3);
+}
+
+.game-cover {
+    width: 100%;
+    height: 100%;
+    background: var(--bg2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--dim);
+    font-size: 14px;
+    position: relative;
+    overflow: hidden;
+}
+
+.game-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.game-cover .game-name-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    color: white;
+    font-size: 13px;
+    padding: 20px 8px 8px 8px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 底部操作栏容器（固定在视口底部） */
+.padbar-container {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+/* 底部操作栏 */
+.padbar {
+    display: flex;
+    gap: 18px;
+    background: rgba(11, 17, 32, 0.95);
+    border: 1px solid var(--line2);
+    border-radius: 24px;
+    padding: 18px 36px;
+    margin-bottom: 24px;
+}
+
+.pad-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 24px;
+    color: var(--subtext);
+}
+
+.pad-key {
+    padding: 8px 18px;
+    border-radius: 10px;
+    font-weight: bold;
+    color: white;
+    font-size: 22px;
+}
+
+.key-select { background: #5a6478; }
+.key-a { background: #f5a623; }
+.key-b { background: #e74c3c; }
+.key-x { background: #3498db; }
+.key-lr { background: #9b59b6; }
+.key-y { background: #2ecc71; }
+.key-start { background: #34495e; }
+
+/* 设置页面（旧版卡片式布局的样式已随菜单改版一并删除，
+   现在整套在下方 .settings-shell 那一块） */
+
+/* ---------------- 设置页（复刻 LANGOS 原生 ES 菜单） ----------------
+   LANGOS 原生是"左侧竖排条目 + 右侧当前值"的列表式菜单，这里照这个骨架做。
+   条目分四类，样式上给不同提示：
+     menu   -> 二级菜单，右侧显示 ›
+     leftright -> 左右改值，右侧显示当前值 + ‹ ›
+     button -> 按 A 执行一次的动作，右侧显示行动词
+     readonly -> 只展示，不可操作（右侧值 + 灰色左条）
+   注意 WebKit 2.28 不支持 contain / aspect-ratio，这里只用 flex + 固定行高。 */
+.settings-shell {
+    position: absolute;
+    left: 60px;
+    right: 60px;
+    top: 40px;
+    bottom: 40px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    overflow: hidden;
+}
+
+.settings-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 28px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel2);
+    flex: 0 0 auto;
+}
+
+.settings-crumb {
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--accent2);
+    letter-spacing: 1px;
+}
+
+.settings-hint {
+    display: flex;
+    gap: 20px;
+    font-size: 14px;
+    color: var(--dim);
+}
+
+.settings-hint b {
+    color: var(--subtext);
+    font-weight: bold;
+}
+
+.settings-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 10px 14px;
+}
+
+/* 每行固定 46px：固定行高是这块能跑顺的关键 —— 行高随内容变会导致
+   上下移动时整块重排（WebKit 2.28 没有 contain，隔离不了）。 */
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 46px;
+    padding: 0 16px;
+    border-radius: 10px;
+    font-size: 18px;
+    color: var(--subtext);
+    box-sizing: border-box;
+}
+
+.settings-row .s-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.settings-row .s-aux {
+    flex: 0 0 auto;
+    font-size: 13px;
+    color: var(--dim);
+    margin-left: 14px;
+}
+
+.settings-row .s-val {
+    flex: 0 0 auto;
+    min-width: 180px;
+    text-align: right;
+    color: var(--accent2);
+    font-weight: bold;
+    font-size: 17px;
+}
+
+.settings-row .s-val.editing {
+    color: #ffd166;
+}
+
+.settings-row.s-menu .s-val {
+    color: var(--dim);
+    font-weight: normal;
+}
+
+.settings-row.s-readonly {
+    opacity: 0.72;
+}
+
+.settings-row.s-readonly .s-val {
+    color: var(--subtext);
+    font-weight: normal;
+    font-size: 15px;
+}
+
+/* 高亮行：原生 ES 是白底反色，这里沿用前端已有的 accent 渐变，风格统一 */
+.settings-row.active {
+    background: linear-gradient(90deg, var(--accent) 0%, #3a6fd6 100%);
+    color: #fff;
+}
+
+.settings-row.active .s-val,
+.settings-row.active .s-val.editing,
+.settings-row.active .s-aux {
+    color: #fff;
+}
+
+.settings-foot {
+    flex: 0 0 auto;
+    padding: 12px 28px;
+    border-top: 1px solid var(--line);
+    background: var(--panel2);
+    font-size: 15px;
+    color: var(--dim);
+    min-height: 20px;
+}
+
+/* 搜索界面 */
+.search-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 40px;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.search-title {
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--accent2);
+    margin-bottom: 20px;
+}
+
+.search-input-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 30px;
+}
+
+.search-input {
+    flex: 1;
+    height: 56px;
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 0 20px;
+    font-size: 18px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+}
+
+.search-result-count {
+    font-size: 18px;
+    color: var(--subtext);
+}
+
+.keyboard {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 10px;
+}
+
+.keyboard-key {
+    height: 60px;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.keyboard-key:focus,
+.keyboard-key.active {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.keyboard-key.action {
+    color: var(--danger);
+}
+
+.keyboard-hint {
+    text-align: center;
+    margin-top: 30px;
+    font-size: 14px;
+    color: var(--dim);
+}
+
+/* 页面切换 */
+.page {
+    display: none;
+}
+
+.page.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+
+/* 返回按钮 */
+.back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--accent);
+    font-size: 16px;
+    cursor: pointer;
+    margin-bottom: 20px;
+}
+</style>
+</head>
+<body>
+<div class="design-container" id="designContainer">
+<div class="app">
+    <!-- 顶部栏 -->
+    <div class="topbar">
+        <div class="logo">
+            <div class="logo-text">LANGOS</div>
+        </div>
+        <div class="searchbox" onclick="showPage('search')">
+            <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <span>搜索</span>
+        </div>
+        <div class="status">
+            <div class="status-item">
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z" fill="currentColor"/>
+                </svg>
+                <span>3</span>
+            </div>
+            <div class="status-item">
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z" fill="currentColor"/>
+                </svg>
+                <span>53%</span>
+            </div>
+            <div class="time">
+                <div class="time-main">12:43</div>
+                <div class="time-sub">2026-09-12 六</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 分类标签栏 -->
+    <!-- 数量不再写死：由 renderPlatforms 之前的 updateTabCounts() 按 platforms
+         数组实算。写死的后果是每加一个平台就漏一个数（之前"全部 20"其实早就不对了）。 -->
+    <div class="cat-tabs" id="catTabs">
+        <div class="cat-tab active" data-cat="all"><span>全部</span></div>
+        <div class="cat-tab" data-cat="nintendo"><span>任天堂</span></div>
+        <div class="cat-tab" data-cat="sega"><span>世嘉</span></div>
+        <div class="cat-tab" data-cat="sony"><span>索尼</span></div>
+        <div class="cat-tab" data-cat="arcade"><span>街机</span></div>
+        <div class="cat-tab" data-cat="handheld"><span>掌机</span></div>
+        <div class="cat-tab" data-cat="computer"><span>电脑</span></div>
+        <div class="cat-tab" data-cat="other"><span>其他</span></div>
+    </div>
+
+    <!-- 主页 -->
+    <div class="page active" id="pageHome">
+        <div class="header">
+            <div class="header-left">
+                <h1>全部机种</h1>
+                <p>20 个平台 · 共 6109 款游戏</p>
+            </div>
+        </div>
+        <div class="content">
+            <div class="platform-grid" id="platformGrid">
+                <!-- 平台卡片由JS生成 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏列表页 -->
+    <div class="page" id="pageGames">
+        <div class="content" style="padding-top: 20px;">
+            <div class="back-btn" onclick="showPage('home')">← 返回</div>
+            <div class="game-header">
+                <h1 id="gamePlatformName">Game Boy Advance</h1>
+                <div class="info">
+                    <span>厂商</span> 任天堂
+                    <span>分组</span> 任天堂
+                    <span>扩展名</span> gba, agb
+                    <span>RA 核心</span> mgba / vba_m
+                </div>
+            </div>
+            <div class="game-grid" id="gameGrid">
+                <!-- 游戏卡片由JS生成 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置页：复刻 LANGOS 原生 ES 的菜单树（两级：主菜单 -> 子菜单） -->
+    <div class="page" id="pageSettings">
+        <div class="settings-shell">
+            <div class="settings-head">
+                <div class="settings-crumb" id="settingsCrumb">设置</div>
+                <div class="settings-hint" id="settingsHint">
+                    <span><b>↑↓</b> 选择</span>
+                    <span><b>←→</b> 改值</span>
+                    <span><b>A</b> 进入/确定</span>
+                    <span><b>B</b> 返回</span>
+                </div>
+            </div>
+            <div class="settings-body" id="settingsBody">
+                <!-- 菜单项由 JS 渲染 -->
+            </div>
+            <div class="settings-foot" id="settingsFoot">—</div>
+        </div>
+    </div>
+
+    <!-- 搜索页 -->
+    <div class="page" id="pageSearch">
+        <div class="content" style="padding-top: 20px;">
+            <div class="back-btn" onclick="showPage('home')">← 返回</div>
+            <div class="search-panel">
+                <div class="search-title">搜索游戏</div>
+                <div class="search-input-row">
+                    <div class="search-input" id="searchInput">输入首字母或关键词...</div>
+                    <div class="search-result-count">0 款</div>
+                </div>
+                <div class="keyboard" id="keyboard">
+                    <!-- 键盘由JS生成 -->
+                </div>
+                <div class="keyboard-hint">方向键选字母/结果 · A 输入/启动 · B 删除/返回 · ↓ 进入结果 ↑ 回键盘 · START 清空</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 底部操作栏（固定在视口底部，不随内容滚动） -->
+<div class="padbar-container">
+    <div class="padbar" id="padbar">
+        <div class="pad-item"><span class="pad-key key-select">◇</span> 选择</div>
+        <div class="pad-item"><span class="pad-key key-a">A</span> 确认</div>
+        <div class="pad-item"><span class="pad-key key-b">B</span> 返回</div>
+        <div class="pad-item"><span class="pad-key key-x">X</span> 收藏</div>
+        <div class="pad-item"><span class="pad-key key-lr">L R</span> 切换</div>
+        <div class="pad-item"><span class="pad-key key-y">Y</span> 搜索</div>
+        <div class="pad-item"><span class="pad-key key-start">START</span> 设置</div>
+    </div>
+</div>
+
+<script>
+// 平台数据
+const platforms = [
+    { id: 'history', name: '游玩历史', sub: 'RECENT', core: '最近30款', count: 0, tag: '最近游玩', color: 'color-history', logo: '历史', cat: 'all' },
+    { id: 'favorite', name: '我的收藏', sub: 'FAVORITES', core: '收藏置顶', count: 0, tag: 'X键收藏', color: 'color-favorite', logo: '收藏', cat: 'all' },
+    { id: 'FC', name: 'FC / NES 红白机', sub: '任天堂', core: 'nestopia', count: 926, tag: '任天堂', color: 'color-fc', logo: 'FC', cat: 'nintendo' },
+    { id: 'SFC', name: 'SFC / SNES 超任', sub: '任天堂', core: 'snes9x', count: 818, tag: '任天堂', color: 'color-sfc', logo: 'SFC', cat: 'nintendo' },
+    { id: 'GB', name: 'Game Boy', sub: '任天堂', core: 'gambatte', count: 776, tag: '任天堂', color: 'color-gb', logo: 'GB', cat: 'handheld' },
+    { id: 'GBC', name: 'Game Boy Color', sub: '任天堂', core: 'gambatte', count: 484, tag: '任天堂', color: 'color-gbc', logo: 'GBC', cat: 'handheld' },
+    { id: 'GBA', name: 'Game Boy Advance', sub: '任天堂', core: 'mgba', count: 459, tag: '任天堂', color: 'color-gba', logo: 'GBA', cat: 'nintendo' },
+    { id: 'NDS', name: 'Nintendo DS', sub: '任天堂', core: 'drastic_adv-sa', count: 280, tag: '任天堂', color: 'color-nds', logo: 'NDS', cat: 'nintendo' },
+    { id: 'J2ME', name: 'J2ME 手机游戏', sub: 'Java', core: 'freej2me-plus', count: 0, tag: 'Java', color: 'color-j2me', logo: 'J2ME', cat: 'other' },
+    { id: 'MD', name: 'Mega Drive', sub: '世嘉', core: 'genesis_plus_gx', count: 520, tag: '世嘉', color: 'color-md', logo: 'MD', cat: 'sega' },
+    { id: 'SS', name: 'Saturn', sub: '世嘉', core: 'yabause', count: 180, tag: '世嘉', color: 'color-ss', logo: 'SS', cat: 'sega' },
+    { id: 'DC', name: 'Dreamcast', sub: '世嘉', core: 'flycast', count: 95, tag: '世嘉', color: 'color-dc', logo: 'DC', cat: 'sega' },
+    { id: 'PS1', name: 'PlayStation', sub: '索尼', core: 'pcsx_rearmed', count: 650, tag: '索尼', color: 'color-ps', logo: 'PS', cat: 'sony' },
+    { id: 'PSP', name: 'PlayStation Portable', sub: '索尼', core: 'ppsspp', count: 280, tag: '索尼', color: 'color-psp', logo: 'PSP', cat: 'sony' },
+    { id: 'DOS', name: 'DOS', sub: '电脑', core: 'dosbox', count: 120, tag: '电脑', color: 'color-dos', logo: 'DOS', cat: 'computer' },
+    { id: 'PCE', name: 'PC Engine', sub: 'NEC', core: 'mednafen_pce', count: 80, tag: 'NEC', color: 'color-pce', logo: 'PCE', cat: 'other' },
+    { id: 'NGPC', name: 'Neo Geo Pocket Color', sub: 'SNK', core: 'mednafen_ngp', count: 50, tag: 'SNK', color: 'color-ngpc', logo: 'NGPC', cat: 'handheld' },
+    { id: 'WS', name: 'WonderSwan', sub: '万代', core: 'mednafen_wswan', count: 60, tag: '万代', color: 'color-ws', logo: 'WS', cat: 'handheld' },
+    { id: 'WSC', name: 'WonderSwan Color', sub: '万代', core: 'mednafen_wswan', count: 40, tag: '万代', color: 'color-wsc', logo: 'WSC', cat: 'handheld' },
+    { id: 'GG', name: 'Game Gear', sub: '世嘉', core: 'genesis_plus_gx', count: 100, tag: '世嘉', color: 'color-gg', logo: 'GG', cat: 'handheld' },
+    { id: 'NAOMI', name: 'NAOMI', sub: '街机', core: 'flycast', count: 30, tag: '街机', color: 'color-naomi', logo: 'NAOMI', cat: 'arcade' },
+
+    // ---- 卡二（TF2，116G 游戏卡）上真实存在的机种 -------------------------
+    // 这批 id 就是卡二 /roms2/roms 下的目录名（大小写不敏感），宿主里的
+    // PLATFORM_MAP 把它们对到 LANGOS es_systems.cfg 的系统名去取启动命令。
+    // count 只是卡片上先显示的预估值，真正进平台列表后会按实扫结果刷新。
+    { id: 'N64', name: 'Nintendo 64', sub: '任天堂', core: 'mupen64plus', count: 16, tag: '任天堂', color: 'color-n64', logo: 'N64', cat: 'nintendo' },
+    { id: 'GW', name: 'Game & Watch', sub: '任天堂', core: 'gw', count: 47, tag: '任天堂', color: 'color-gw', logo: 'G&W', cat: 'handheld' },
+    { id: 'MS', name: 'Master System', sub: '世嘉', core: 'genesis_plus_gx', count: 97, tag: '世嘉', color: 'color-md', logo: 'MS', cat: 'sega' },
+    { id: 'ARCADE', name: '街机 FBNeo', sub: '街机', core: 'fbneo', count: 1811, tag: '街机', color: 'color-arcade', logo: 'ARC', cat: 'arcade' },
+    { id: 'OPENBOR', name: 'OpenBOR 同人格斗', sub: '同人', core: 'OpenBor', count: 7, tag: '同人', color: 'color-openbor', logo: 'OBR', cat: 'arcade' },
+    { id: 'ATARI2600', name: 'Atari 2600', sub: '雅达利', core: 'stella', count: 681, tag: '雅达利', color: 'color-atari', logo: '2600', cat: 'other' },
+    { id: 'ATARI7800', name: 'Atari 7800', sub: '雅达利', core: 'prosystem', count: 116, tag: '雅达利', color: 'color-atari', logo: '7800', cat: 'other' },
+    { id: 'LYNX', name: 'Atari Lynx', sub: '雅达利', core: 'handy', count: 48, tag: '雅达利', color: 'color-atari', logo: 'LYNX', cat: 'handheld' },
+    { id: 'PICO8', name: 'PICO-8 幻想主机', sub: 'Fantasy', core: 'pico8', count: 93, tag: '幻想主机', color: 'color-pico', logo: 'P8', cat: 'other' },
+    { id: 'PORTS', name: '移植游戏 Ports', sub: '电脑', core: 'SDL', count: 45, tag: '电脑', color: 'color-ports', logo: 'PORT', cat: 'computer' },
+    { id: 'EASYRPG', name: 'RPG Maker / EasyRPG', sub: '电脑', core: 'easyrpg', count: 2, tag: '电脑', color: 'color-dos', logo: 'RPG', cat: 'computer' },
+];
+
+// 分类页签的数量按 platforms 实算，省得每加一个平台就手工去改标签文本
+function updateTabCounts() {
+    const tabs = document.querySelectorAll('.cat-tab');
+    tabs.forEach(tab => {
+        const cat = tab.dataset.cat;
+        const n = cat === 'all'
+            ? platforms.length
+            : platforms.filter(p => p.cat === cat).length;
+        const label = tab.querySelector('span');
+        if (!label) { return; }
+        let badge = tab.querySelector('b');
+        if (!badge) {
+            badge = document.createElement('b');
+            tab.appendChild(badge);
+        }
+        badge.textContent = n;
+    });
+}
+
+// 游戏示例数据
+const sampleGames = [
+    '魂斗罗', '超级马里奥', '塞尔达传说', '口袋妖怪', '恶魔城',
+    '银河战士', '火焰纹章', '星之卡比', '瓦里奥', '大金刚',
+    '马里奥赛车', '任天堂明星大乱斗', '动物森友会', 'Splatoon', 'ARMS',
+    '1-2-Switch', '超级马里奥奥德赛', '异度神剑', '猎天使魔女', '勇者斗恶龙'
+];
+
+// 渲染平台卡片
+function renderPlatforms(cat = 'all') {
+    updateTabCounts();
+    const grid = document.getElementById('platformGrid');
+    const filtered = cat === 'all' ? platforms : platforms.filter(p => p.cat === cat);
+    grid.innerHTML = filtered.map((p, i) => `
+        <div class="platform-card ${i === 2 ? 'active' : ''}" data-id="${p.id}" tabindex="0">
+            <div class="platform-art ${p.color}">
+                <div class="platform-logo">${p.logo}</div>
+                <div class="platform-count">${p.count} 款</div>
+                <div class="platform-tag">${p.tag}</div>
+            </div>
+            <div class="platform-meta">
+                <div class="platform-name">${p.name}</div>
+                <div class="platform-sub-row">
+                    <span class="platform-sub">${p.sub}</span>
+                    <span class="platform-core">${p.core}</span>
+                </div>
+            </div>
+        </div>
+    `).join('');
+
+    // 绑定点击事件
+    grid.querySelectorAll('.platform-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const id = card.dataset.id;
+            const platform = platforms.find(p => p.id === id);
+            if (platform) {
+                showGames(platform);
+            }
+        });
+    });
+}
+
+// 游戏列表缓存
+const gameListCache = {};
+
+// 解析Pegasus格式metadata.pegasus.txt
+function parsePegasusMetadata(text, platformDir) {
+    const games = [];
+    const lines = text.split('\n');
+    let currentGame = null;
+    let launchCmd = '';
+    let inLaunch = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        
+        if (trimmed.startsWith('collection:')) {
+            continue;
+        } else if (trimmed.startsWith('launch:')) {
+            launchCmd = trimmed.substring('launch:'.length).trim();
+            inLaunch = true;
+            continue;
+        } else if (inLaunch && trimmed.startsWith('-') && !trimmed.startsWith('game:') && !trimmed.startsWith('file:')) {
+            launchCmd += ' ' + trimmed;
+            continue;
+        } else if (trimmed.startsWith('game:')) {
+            if (currentGame) {
+                games.push(currentGame);
+            }
+            currentGame = {
+                name: trimmed.substring('game:'.length).trim(),
+                path: '',
+                image: '',
+                launch: launchCmd,
+                description: '',
+                developer: ''
+            };
+            inLaunch = false;
+        } else if (trimmed.startsWith('file:') && currentGame) {
+            currentGame.path = trimmed.substring('file:'.length).trim();
+            const gameName = currentGame.name;
+            currentGame.image = platformDir + '/media/' + gameName + '/boxFront.jpg';
+        } else if (trimmed.startsWith('developer:') && currentGame) {
+            currentGame.developer = trimmed.substring('developer:'.length).trim();
+        } else if (trimmed.startsWith('description:') && currentGame) {
+            currentGame.description = trimmed.substring('description:'.length).trim();
+        } else if (currentGame && currentGame.description && !trimmed.startsWith(':') && trimmed.length > 0 && !trimmed.startsWith('game:') && !trimmed.startsWith('file:') && !trimmed.startsWith('sort-by:') && !trimmed.startsWith('developer:')) {
+            currentGame.description += ' ' + trimmed;
+        }
+    }
+    if (currentGame) {
+        games.push(currentGame);
+    }
+    return games;
+}
+
+// 解析gamelist.xml
+function parseGameListXml(xmlText, platformDir) {
+    const games = [];
+    try {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+        const gameNodes = xmlDoc.getElementsByTagName('game');
+        for (let i = 0; i < gameNodes.length; i++) {
+            const node = gameNodes[i];
+            const pathNode = node.getElementsByTagName('path')[0];
+            const nameNode = node.getElementsByTagName('name')[0];
+            const imageNode = node.getElementsByTagName('image')[0];
+            const path = pathNode ? pathNode.textContent.trim() : '';
+            const name = nameNode ? nameNode.textContent.trim() : path;
+            let image = imageNode ? imageNode.textContent.trim() : '';
+            if (image && image.startsWith('./')) {
+                image = platformDir + '/' + image.substring(2);
+            } else if (image && !image.startsWith('/')) {
+                image = platformDir + '/' + image;
+            }
+            games.push({ path, name, image, launch: '', description: '', developer: '' });
+        }
+    } catch (e) {
+        console.error('parseGameListXml error:', e);
+    }
+    return games;
+}
+
+// 渲染游戏列表
+async function renderGames(platform) {
+    const grid = document.getElementById('gameGrid');
+    document.getElementById('gamePlatformName').textContent = platform.name;
+    
+    grid.innerHTML = '<div style="text-align: center; padding: 60px; color: var(--dim); font-size: 20px;">加载游戏列表中...</div>';
+    
+    try {
+        let romRoot = '';
+        if (window.AndroidBridge && window.AndroidBridge.getRomRoot) {
+            romRoot = window.AndroidBridge.getRomRoot();
+        }
+        if (!romRoot) {
+            romRoot = '/storage/FBFB-0D4A/Roms';
+        }
+        
+        const platformDir = romRoot + '/' + platform.id;
+        
+        let games = gameListCache[platform.id];
+        if (!games) {
+            games = [];
+            
+            // 先尝试Pegasus格式
+            const pegasusPath = platformDir + '/metadata.pegasus.txt';
+            let pegasusText = '';
+            if (window.AndroidBridge && window.AndroidBridge.readText) {
+                pegasusText = window.AndroidBridge.readText(pegasusPath);
+            }
+            if (pegasusText) {
+                games = parsePegasusMetadata(pegasusText, platformDir);
+            }
+            
+            // 如果Pegasus格式没有游戏，尝试gamelist.xml
+            if (games.length === 0) {
+                const gamelistPath = platformDir + '/gamelist.xml';
+                let xmlText = '';
+                if (window.AndroidBridge && window.AndroidBridge.readText) {
+                    xmlText = window.AndroidBridge.readText(gamelistPath);
+                }
+                if (xmlText) {
+                    games = parseGameListXml(xmlText, platformDir);
+                }
+            }
+            
+            // 如果都没有，扫描目录中的ROM文件
+            if (games.length === 0 && window.AndroidBridge && window.AndroidBridge.listDir) {
+                // 这张表要和宿主 vagaretro-shell.py 里的 ROM_EXTS 保持一致：
+                // 宿主预扫描时就按 ROM_EXTS 过了一遍，两边都得认，文件才到得了界面。
+                // 2026-09-14 按卡二实际内容补：7z(2600/fbneo)、n64/z64、
+                // p8(pico-8)、pak(openbor)、sh(ports)、cso(psp)、cdi(dc)、
+                // a26/a78/lnx/sms(雅达利/世嘉老机)。
+                const exts = ['zip', '7z', 'nes', 'smc', 'sfc', 'gba', 'gbc', 'gb', 'md',
+                              'iso', 'bin', 'cue', 'pbp', 'chd', 'nds', 'pce', 'ngp', 'ngc',
+                              'ws', 'wsc', 'gg', 'exe', 'com', 'bat',
+                              'a26', 'a78', 'lnx', 'sms', 'n64', 'z64', 'v64',
+                              'cso', 'cdi', 'img', 'p8', 'pak', 'sh', 'easyrpg', 'm3u'];
+                try {
+                    const files = JSON.parse(window.AndroidBridge.listDir(platformDir, exts.join(',')) || '[]');
+                    games = files.map(f => ({
+                        // title 只用于显示；path 才是相对平台目录的真实路径
+                        // （卡二上 FC/SFC/MD/GBA/WS 的 ROM 都散在分类子目录里，
+                        //   path 会是 "01-动作游戏/xxx.zip" 这种带目录的形式）
+                        name: (f.title || f.name).replace(/\.[^/.]+$/, ''),
+                        path: f.name,
+                        image: '',
+                        launch: '',
+                        description: '',
+                        developer: ''
+                    }));
+                } catch (e) {
+                    console.error('listDir error:', e);
+                }
+            }
+            
+            gameListCache[platform.id] = games;
+        }
+        
+        if (games.length === 0) {
+            grid.innerHTML = '<div style="text-align: center; padding: 60px; color: var(--dim); font-size: 20px;">暂无游戏</div>';
+            destroyGameScroll();
+            return;
+        }
+        
+        platform.count = games.length;
+        
+        // ---- 分片渲染 ----------------------------------------------------
+        // 卡二上 FC 有 3763 个 ROM、ARCADE 有 1999 个。原实现一次性
+        // grid.innerHTML = games.map(...) 把几千张卡全塞进 DOM，在这台
+        // RK3326 上（WebKit 走软件渲染）会直接卡住好几秒。
+        // 现在先放第一片，剩下的靠 IntersectionObserver + 手柄导航按需追加。
+        gameRenderState = { platform: platform, games: games, rendered: 0 };
+        resetCoverObserver();       // 上一批封面的观察器先丢掉
+        grid.innerHTML = '';
+        syncCardMetrics();          // 卡片高度对齐网格真实宽度
+        appendGameChunk(FIRST_PAGE_SIZE);   // 首屏用更小的一片，先抢出画面
+        setupGameScroll();
+        
+    } catch (e) {
+        console.error('renderGames error:', e);
+        grid.innerHTML = '<div style="text-align: center; padding: 60px; color: var(--danger); font-size: 20px;">加载失败：' + e.message + '</div>';
+    }
+}
+
+// -------------------------------------------------------------- 分片渲染
+// 每片多少张卡。**这个数字是量出来的，不是拍脑袋的**（真机 R36H ProMax 实测）：
+//   一片的代价几乎全在"新节点入树 + WebKit 布局"这一下，其余步骤都是 1~10ms。
+//   60 张 = 199~238ms  <- 明显掉帧，滚动时会顿一下
+//   30 张 = 101~130ms
+//   20 张 =  87~ 97ms
+// 每张卡的边际成本约 3.6~4.6ms（软件栅格化下的固定开销，不随总数变差），
+// 所以只能靠"把一次入树的量压小"来换平顺。15 张约 70ms，正好卡在
+// 人开始察觉的阈值以下。
+//
+// 首屏单独用更小的一片（FIRST_PAGE_SIZE）：首屏那一下是用户唯一"盯着空屏等"
+// 的时刻，越早出画面越好；后面都是滚动中补齐，用户本来就在动，感知更宽容。
+const FIRST_PAGE_SIZE = 15;    // 首屏：抢出画面
+const GAME_PAGE_SIZE = 20;     // 后续：每片约 90ms，几乎不顿
+let gameRenderState = { platform: null, games: [], rendered: 0 };
+let gameScrollObserver = null;
+
+// -------------------------------------------------------------- 卡片尺寸
+// 卡片高度必须由代码写死。WebKit 2.28 不支持 aspect-ratio（Safari 15 才有），
+// 原来那行 `aspect-ratio: 3/4` 完全是空转 —— 高度被封面图自身的像素尺寸
+// 撑出来，于是**每张封面解码完成都会把整个网格重排一次**。
+// 现在按网格真实宽度算出 3:4 的高度写进 --card-h，布局与图片彻底解耦。
+// 两份常量要和 .game-chunk 的 grid-template-columns / gap 保持一致。
+// 列数 4 而不是原来的 5（用户 2026-09-14："游戏列表一排四个"）——
+// 封面高按 宽*4/3 跟着 235→299，大了一倍不止，看得清是哪款游戏。
+const GAME_COLS = 4;
+const GAME_GAP = 16;
+
+function syncCardMetrics(tries) {
+    const grid = document.getElementById('gameGrid');
+    if (!grid) { return; }
+    const w = grid.clientWidth || grid.offsetWidth;
+    if (w <= 0) {
+        // 列表页此时可能还没显示（.page{display:none} 时量不到宽度），
+        // 下一帧再试，最多试 30 帧。
+        if ((tries || 0) < 30) {
+            requestAnimationFrame(() => syncCardMetrics((tries || 0) + 1));
+        }
+        return;
+    }
+    const cw = (w - GAME_GAP * (GAME_COLS - 1)) / GAME_COLS;
+    document.documentElement.style.setProperty('--card-h', Math.round(cw * 4 / 3) + 'px');
+}
+
+function gameCardHtml(g, i) {
+    return `
+        <div class="game-card ${i === 0 ? 'active' : ''}" data-index="${i}" data-path="${g.path}" data-launch="${encodeURIComponent(g.launch || '')}" tabindex="0">
+            <div class="game-cover" data-image="${g.image || ''}">
+                ${g.image ? '' : `<span>${g.name}</span>`}
+                <div class="game-name-overlay">${g.name}</div>
+            </div>
+        </div>
+    `;
+}
+
+function appendGameChunk(size) {
+    const grid = document.getElementById('gameGrid');
+    const st = gameRenderState;
+    if (!grid || !st.games || st.rendered >= st.games.length) {
+        return false;
+    }
+    const step = size || GAME_PAGE_SIZE;
+    const end = Math.min(st.rendered + step, st.games.length);
+
+    // 一片 = 一个独立 .game-chunk（自己的 display:grid）。
+    // 追加新片时旧片完全不受影响 —— 这是 WebKit 2.28 上唯一能用的
+    // "布局隔离"手段（它不认 CSS contain）。
+    const chunk = document.createElement('div');
+    chunk.className = 'game-chunk';
+
+    const holder = document.createElement('div');
+    holder.innerHTML = st.games.slice(st.rendered, end)
+        .map((g, k) => gameCardHtml(g, st.rendered + k)).join('');
+
+    // 事件用**委托**挂在片容器上，不再给每张卡各挂一个监听器。
+    // 实测每片 60 张卡、手动 addEventListener 要花掉可观的时间，
+    // 而且几千张卡就是几千个闭包常驻内存。
+    chunk.addEventListener('click', ev => {
+        const card = ev.target.closest ? ev.target.closest('.game-card') : null;
+        if (!card || !chunk.contains(card)) { return; }
+        const index = parseInt(card.dataset.index, 10);
+        const game = st.games[index];
+        if (game) { launchGame(st.platform, game); }
+    });
+
+    // 整片搬进去：一次性 append 比逐张 appendChild 少触发很多次
+    // "新节点入树"的记账（每次入树 WebKit 都要过一遍样式匹配）。
+    while (holder.firstChild) { chunk.appendChild(holder.firstChild); }
+
+    // 封面**整片扫一次**。原来是对每张卡各调一次 loadCovers(n)，
+    // 每次内部都 querySelectorAll 一遍 —— 60 张卡就是 60 次多余的查询。
+    loadCovers(chunk);
+
+    const sentinel = document.getElementById('gameSentinel');
+    if (sentinel && sentinel.parentNode === grid) {
+        grid.insertBefore(chunk, sentinel);   // 哨兵永远排最后
+    } else {
+        grid.appendChild(chunk);
+    }
+    st.rendered = end;
+    // 这里**不能**每片打一行日志：console.log 会经桥接转发给宿主进程，
+    // 翻十几页就是十几次跨进程写日志，本身成了卡顿源。
+    return true;
+}
+
+function setupGameScroll() {
+    destroyGameScroll();
+    const grid = document.getElementById('gameGrid');
+    if (!grid) { return; }
+    const sentinel = document.createElement('div');
+    sentinel.id = 'gameSentinel';
+    sentinel.style.cssText = 'height:2px;';
+    grid.appendChild(sentinel);
+
+    if (typeof IntersectionObserver === 'undefined') {
+        return;   // 老 WebKit 没这个 API 也不打紧，手柄导航到尾部时会自动续
+    }
+    gameScrollObserver = new IntersectionObserver(entries => {
+        entries.forEach(en => {
+            if (!en.isIntersecting) { return; }
+            // 哨兵进入 600px 预取区时，**一次补满缓冲**再收手。
+            // 单片只有 20 张（约 90ms），一片填不满 600px 的预取区，
+            // 只补一片的话哨兵马上又进视口 -> 回调连续触发，等于把
+            // 90ms 的顿拆成好几次。这里按屏高估一个够用的片数。
+            let added = false;
+            const need = Math.max(1, Math.ceil(
+                (window.innerHeight + 600) / Math.max(1, cardRowHeight()) * GAME_COLS / GAME_PAGE_SIZE));
+            for (let i = 0; i < need; i++) {
+                if (!appendGameChunk()) { break; }
+                added = true;
+            }
+            if (added) {
+                grid.appendChild(sentinel);   // 哨兵永远排在最后
+            } else {
+                destroyGameScroll();
+            }
+        });
+    }, { rootMargin: '600px 0px' });
+    gameScrollObserver.observe(sentinel);
+}
+
+// 一行卡片有多高（含 gap）。用来估算"要补几片才够填满预取区"。
+function cardRowHeight() {
+    const el = document.querySelector('.game-card');
+    if (el && el.offsetHeight > 0) { return el.offsetHeight + 16; }
+    return 360;
+}
+
+// 封面延迟解码：WebKit 2.28 不认 <img loading="lazy">（Safari 15.4 才有），
+// 所以 60 张卡的封面会在同一帧里全部触发解码 + 缩放，纯软件栅格化下就是
+// 一次几百毫秒的卡顿。这里自己用 IntersectionObserver 把关：卡片快到视口
+// 了才把 src 接上。
+let coverObserver = null;
+
+function ensureCoverObserver() {
+    if (coverObserver) { return coverObserver; }
+    if (typeof IntersectionObserver === 'undefined') { return null; }
+    coverObserver = new IntersectionObserver(entries => {
+        entries.forEach(en => {
+            if (!en.isIntersecting) { return; }
+            const img = en.target;
+            coverObserver.unobserve(img);
+            const pending = img.dataset.pending;
+            if (pending) {
+                delete img.dataset.pending;
+                img.src = 'file://' + pending;
+            }
+        });
+    }, { rootMargin: '500px 0px' });
+    return coverObserver;
+}
+
+// 换列表时把封面观察器整个丢掉，否则 IntersectionObserver 会一直强引用
+// 上一批已被移除的 <img>，翻几次平台就攒出一堆垃圾。
+function resetCoverObserver() {
+    if (coverObserver) {
+        coverObserver.disconnect();
+        coverObserver = null;
+    }
+}
+
+function destroyGameScroll() {
+    if (gameScrollObserver) {
+        gameScrollObserver.disconnect();
+        gameScrollObserver = null;
+    }
+    const s = document.getElementById('gameSentinel');
+    if (s && s.parentNode) { s.parentNode.removeChild(s); }
+}
+
+// 加载封面图片
+// root 传了就只扫这个子树（分片渲染时只处理刚追加的那一片），
+// 不传就是整页。原来固定扫整页，几千张卡时每次都全量遍历，越滚越卡。
+function loadCovers(root) {
+    const scope = root || document;
+    const covers = scope.querySelectorAll('.game-cover[data-image]');
+    // 注意：这里**不要**打 console.log。
+    // 前端的 console 是经 UserContentManager 桥接到宿主进程再写文件的，
+    // 一条日志就是一次跨进程 IPC。分片渲染时每次追加都会调到这里，
+    // 每片打两条日志，翻十几页就把宿主拖出肉眼可见的卡顿。
+    let loaded = 0;
+    let failed = 0;
+    let skipped = 0;
+    covers.forEach((cover, index) => {
+        const imagePath = cover.dataset.image;
+        if (!imagePath) {
+            skipped++;
+            return;
+        }
+        const existingImg = cover.querySelector('img');
+        if (existingImg && existingImg.src && existingImg.src.length > 10) {
+            skipped++;
+            return;
+        }
+        // 已经挂上观察器、等着进视口解码的，别重复 observe。
+        // （resize / 翻页会重入 loadCovers，不做这个判断的话同一张图会被
+        //   反复 observe，IntersectionObserver 内部集合越滚越大）
+        if (existingImg && existingImg.dataset && existingImg.dataset.pending) {
+            skipped++;
+            return;
+        }
+        // 创建新的img元素
+        const img = existingImg || document.createElement('img');
+        img.alt = '';
+        img.decoding = 'async';   // WebKit 2.28 不认 img.loading，用这个
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';
+        img.onerror = function() {
+            failed++;
+            // 直接 file:// 加载失败时的兜底。宿主那边 readMediaDataUrl 现在恒返回空串
+            // （前端本来就优先 file://），所以这里静默即可 —— 原来每条都打一行日志，
+            // 上千个没封面的 ROM 会把宿主日志刷爆，本身也是开销。
+            if (window.AndroidBridge && window.AndroidBridge.readMediaDataUrl) {
+                try {
+                    const dataUrl = window.AndroidBridge.readMediaDataUrl(imagePath);
+                    if (dataUrl && dataUrl.length > 100) {
+                        img.src = dataUrl;
+                        loaded++;
+                    }
+                } catch (e) {
+                    console.error('load cover error:', e, imagePath);
+                }
+            }
+        };
+        img.onload = function() {
+            loaded++;
+        };
+        if (!existingImg) {
+            cover.insertBefore(img, cover.firstChild);
+        }
+        const obs = ensureCoverObserver();
+        if (obs) {
+            img.dataset.pending = imagePath;   // 到视口附近才真正解码
+            obs.observe(img);
+        } else {
+            img.src = 'file://' + imagePath;
+        }
+    });
+}
+
+// 启动游戏
+function launchGame(platform, game) {
+    if (!window.AndroidBridge) {
+        alert('启动游戏需要Android环境');
+        return;
+    }
+    
+    const romPath = game.path.startsWith('/') ? game.path : 
+        (window.AndroidBridge.getRomRoot() + '/' + platform.id + '/' + game.path.replace('./', ''));
+    
+    // 如果有Pegasus格式的launch命令，使用它
+    if (game.launch) {
+        const launchCmd = decodeURIComponent(game.launch).replace('{file.path}', romPath);
+        if (window.AndroidBridge.executeShellCommand) {
+            const result = window.AndroidBridge.executeShellCommand(launchCmd);
+            try {
+                const res = JSON.parse(result);
+                if (!res.ok) {
+                    alert(res.message || '启动失败');
+                }
+            } catch (e) {
+                console.error('launchGame shell error:', e);
+            }
+            return;
+        }
+    }
+    
+    // 否则使用默认的launchRetroArch方法
+    if (window.AndroidBridge.launchRetroArch) {
+        const cores = platform.core ? [platform.core] : [];
+        const result = window.AndroidBridge.launchRetroArch(romPath, JSON.stringify(cores), platform.name);
+        try {
+            const res = JSON.parse(result);
+            if (!res.ok) {
+                alert(res.message || '启动失败');
+            }
+        } catch (e) {
+            console.error('launchGame error:', e);
+        }
+    }
+}
+
+// 渲染键盘
+function renderKeyboard() {
+    const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+    const keyboard = document.getElementById('keyboard');
+    keyboard.innerHTML = keys.map((k, i) => `
+        <div class="keyboard-key ${i === 0 ? 'active' : ''}" data-key="${k}">${k}</div>
+    `).join('') + `
+        <div class="keyboard-key action" data-key="back">⌫</div>
+        <div class="keyboard-key action" data-key="clear">清空</div>
+        <div class="keyboard-key action" data-key="search">搜索</div>
+    `;
+}
+
+// 页面切换
+/* ==================== 设置页：复刻 LANGOS 原生 ES 菜单 ====================
+   设计原则（跟宿主侧 settings 数据层是配套的）：
+     1. 菜单树、条目名、可选项 **照抄 LANGOS 原生的 ES**（名字是从
+        /usr/bin/emulationstation 里 strings 抠出来的），不自己发明设置项；
+     2. 值不写死在前端 —— 全部来自 bridge.getSettings()，那是宿主启动时
+        从真实文件/节点读出来的；
+     3. 改值一律走 bridge.setSetting(key, value)，落到 LANGOS 自己认的那个
+        文件/节点上（es_settings.cfg、sysfs、amixer），不另建存储。
+
+   条目类型（跟 CSS 里的类名一一对应）：
+     menu      二级菜单，A 进入
+     leftright 左右改值；continuous=1 的（音量/亮度）左右只改内存，
+               离开这一行时才 flush 落盘，避免按住连打时每一下都写磁盘
+     button    按 A 执行一次
+     readonly  只读展示
+*/
+const SETTINGS_MENU = {
+    root: {
+        title: '设置',
+        items: [
+            { id: 'm_perf',  name: 'PERFORMANCE SETTINGS', nameCn: '性能设置', type: 'menu', menu: 'perf' },
+            { id: 'm_sound', name: 'SOUND SETTINGS',       nameCn: '声音设置', type: 'menu', menu: 'sound' },
+            { id: 'm_ui',    name: 'UI SETTINGS',          nameCn: '界面设置', type: 'menu', menu: 'ui' },
+            { id: 'm_scrsv', name: 'SCREENSAVER SETTINGS', nameCn: '屏保设置', type: 'menu', menu: 'scrsv' },
+            { id: 'm_adv',   name: 'ADVANCED SETTINGS',    nameCn: '高级设置', type: 'menu', menu: 'adv' },
+            { id: 'm_info',  name: 'SYSTEM INFO',          nameCn: '系统信息', type: 'menu', menu: 'info' },
+            { id: 'm_quit',  name: 'QUIT',                 nameCn: '退出',     type: 'menu', menu: 'quit' }
+        ]
+    },
+
+    perf: {
+        title: '性能设置',
+        items: [
+            { id: 'cpu_governor', name: 'CPU GOVERNOR', nameCn: 'CPU 调速器', type: 'leftright',
+              hint: '按需调频：省电优先还是性能优先。启动游戏时 LANGOS 仍会临时切到 performance。' },
+            { id: 'gpu_governor', name: 'GPU GOVERNOR', nameCn: 'GPU 调速器', type: 'leftright',
+              hint: 'Mali-G31 的调频策略，卡顿/发热可以在这里换。' },
+            { id: 'dmc_governor', name: 'DMC GOVERNOR', nameCn: '内存调速器', type: 'leftright',
+              hint: 'DDR 频率策略。' },
+            { id: 'max_vram',     name: 'MAX VRAM',     nameCn: '显存上限(MB)', type: 'leftright', step: 25, min: 50, max: 512 }
+        ]
+    },
+
+    sound: {
+        title: '声音设置',
+        items: [
+            { id: 'volume', name: 'SYSTEM VOLUME', nameCn: '系统音量', type: 'leftright',
+              step: 5, min: 0, max: 100, continuous: 1, suffix: '%' }
+        ]
+    },
+
+    ui: {
+        title: '界面设置',
+        items: [
+            { id: 'brightness', name: 'BACKLIGHT',   nameCn: '屏幕亮度', type: 'leftright',
+              step: 5, min: 5, max: 100, continuous: 1, suffix: '%' },
+            { id: 'language',   name: 'LANGUAGE',    nameCn: '界面语言', type: 'leftright' },
+            { id: 'theme',      name: 'THEME',       nameCn: '主题',     type: 'leftright', readonly: 1,
+              hint: '主题切换需要 ES 重新加载主题包，网页前端暂不代改，避免把用户的主题配置改坏。' },
+            { id: 'gamelist_view', name: 'GAMELIST VIEW STYLE', nameCn: '游戏列表视图', type: 'leftright' },
+            { id: 'transition',    name: 'TRANSITION STYLE',    nameCn: '切换动画',     type: 'leftright' }
+        ]
+    },
+
+    scrsv: {
+        title: '屏保设置',
+        items: [
+            { id: 'screensaver_behavior', name: 'SCREENSAVER BEHAVIOR', nameCn: '屏保行为', type: 'leftright' },
+            { id: 'screensaver_after',    name: 'SCREENSAVER AFTER',    nameCn: '等待时长(秒)', type: 'leftright',
+              custom: function (v) { return (v === '0' || v === '') ? '关闭' : (v + ' 秒'); } },
+            { id: 'show_clock', name: 'SHOW CLOCK', nameCn: '显示时钟', type: 'toggle' },
+            { id: 'clock_12h',  name: 'CLOCK 12H',  nameCn: '12 小时制', type: 'toggle' }
+        ]
+    },
+
+    adv: {
+        title: '高级设置',
+        items: [
+            { id: 'favorites_first',     name: 'FAVORITES FIRST',      nameCn: '收藏置顶',     type: 'toggle' },
+            { id: 'quick_system_select', name: 'QUICK SYSTEM SELECT',  nameCn: '快速切换平台', type: 'toggle' },
+            { id: 'folder_view',         name: 'FOLDER VIEW MODE',     nameCn: '文件夹视图',   type: 'leftright' },
+            { id: 'sort_systems',        name: 'SORT SYSTEMS',         nameCn: '平台排序',     type: 'leftright' }
+        ]
+    },
+
+    info: {
+        title: '系统信息',
+        items: []
+    },
+
+    quit: {
+        title: '退出',
+        items: [
+            { id: 'q_restart_es', name: 'RESTART EMULATIONSTATION', nameCn: '重启 EmulationStation', type: 'button',
+              confirm: '确认重启 EmulationStation？', action: 'restart_es' },
+            { id: 'q_shutdown',   name: 'SHUTDOWN SYSTEM',          nameCn: '关闭系统', type: 'button',
+              confirm: '确认关闭系统？现在没有游戏在运行。', action: 'shutdown' },
+            { id: 'q_reboot',     name: 'REBOOT SYSTEM',            nameCn: '重启系统', type: 'button',
+              confirm: '确认重启系统？', action: 'reboot' }
+        ]
+    }
+};
+
+// 屏保等待时长的可选项在宿主侧 choices 里，这里给个兜底（两边都变了要一起改）
+const FALLBACK_CHOICES = {
+    cpu_governor: ['powersave', 'conservative', 'ondemand', 'interactive', 'schedutil', 'performance'],
+    gpu_governor: ['powersave', 'dmc_ondemand', 'simple_ondemand', 'performance', 'userspace'],
+    language: ['en-US', 'zh-CN', 'ja-JP', 'ko-KR', 'fr-FR', 'de-DE', 'es-ES'],
+    gamelist_view: ['automatic', 'basic', 'detailed', 'video', 'grid'],
+    transition: ['instant', 'fade', 'slide', 'slidefade', 'flip', 'cube'],
+    screensaver_behavior: ['dim', 'black', 'random video', 'slideshow', 'clock'],
+    screensaver_after: ['60', '120', '300', '600', '1800', '0'],
+    folder_view: ['never', 'always', 'when_single']
+};
+
+// 布尔项在 ES 里存的是 true/false 字符串，显示成 ON/OFF（跟原生菜单一个观感）
+const ON_OFF = ['OFF', 'ON'];
+
+let settingsCur = { menu: 'root', idx: 0, editing: false, pending: {} };
+
+/* 设置值在页面这边留一份缓存。
+   为什么不能每次都去问桥接：renderSettings() 里每个条目都要取值，
+   一页 7 行就是 7 次 getSettings()，每次都把整个 JSON 序列化+解析一遍；
+   而且调速器/开关这种"改了要立刻在界面上看到"的项，光靠桥接自己改
+   内部 SETTINGS 太隐式 —— 万一桥接那侧没同步，界面就会显示旧值
+   （headless 校验里就是这么抓出来的：发了 set 但界面还显示 performance）。
+   所以：首次从桥接灌一次，之后所有读写都走这份缓存，写完立即回写缓存。 */
+let settingsCache = null;
+
+function settingsData() {
+    if (settingsCache) { return settingsCache; }
+    try {
+        if (window.AndroidBridge && AndroidBridge.getSettings) {
+            settingsCache = JSON.parse(AndroidBridge.getSettings() || '{}');
+        }
+    } catch (e) { console.warn('读设置失败:', e); }
+    if (!settingsCache || typeof settingsCache !== 'object') { settingsCache = {}; }
+    return settingsCache;
+}
+
+// 让缓存失效，下次重新从桥接灌（进设置页时调一次，保证看到的是最新真实值）
+function invalidateSettings() { settingsCache = null; }
+
+function curMenu() {
+    return SETTINGS_MENU[settingsCur.menu] || SETTINGS_MENU.root;
+}
+
+function curItems() {
+    return curMenu().items || [];
+}
+
+function choiceList(item, data) {
+    const c = (data.choices && data.choices[item.id]) || FALLBACK_CHOICES[item.id];
+    if (c && c.length) { return c; }
+    // 没有预置选项的（如 max_vram），用 step/min/max 现推一个
+    if (item.step && item.min !== undefined && item.max !== undefined) {
+        const out = [];
+        for (let v = item.min; v <= item.max; v += item.step) { out.push(String(v)); }
+        return out;
+    }
+    return null;
+}
+
+function isBoolItem(item) {
+    const data = settingsData();
+    const v = data[item.id];
+    return (item.type === 'toggle') || v === 'true' || v === 'false'
+        || (typeof v === 'boolean');
+}
+
+// 把原始值翻译成界面上要显示的那一行字
+function displayValue(item, data) {
+    // 只读项（系统信息）的值是现算的，不在 settings 里
+    if (item.raw !== undefined) {
+        return (item.raw === undefined || item.raw === null || item.raw === '') ? '—' : String(item.raw);
+    }
+    let v = data[item.id];
+    if (v === undefined || v === null) { return '—'; }
+    if (item.type === 'toggle') {
+        return (v === true || v === 'true') ? ON_OFF[1] : ON_OFF[0];
+    }
+    if (typeof v === 'boolean') { return v ? ON_OFF[1] : ON_OFF[0]; }
+    v = String(v);
+    if (v === 'true')  { return ON_OFF[1]; }
+    if (v === 'false') { return ON_OFF[0]; }
+    if (item.custom) { return item.custom(v); }
+    if (v === '') { return '—'; }
+    // 首页/游戏页之外没必要的裸英文值，保持原样即可（原生菜单也是英文值）
+    return v + (item.suffix || '');
+}
+
+function renderSettings() {
+    const data = settingsData();
+    const items = curItems();
+    const body = document.getElementById('settingsBody');
+    if (!body) { return; }
+
+    document.getElementById('settingsCrumb').textContent = curMenu().title;
+
+    if (settingsCur.idx >= items.length) { settingsCur.idx = Math.max(0, items.length - 1); }
+    if (settingsCur.idx < 0) { settingsCur.idx = 0; }
+
+    let html = '';
+    for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        let cls = 'settings-row';
+        if (it.type === 'menu') { cls += ' s-menu'; }
+        if (it.readonly || it.type === 'readonly') { cls += ' s-readonly'; }
+        if (i === settingsCur.idx) { cls += ' active'; }
+
+        let right = '';
+        if (it.type === 'menu') {
+            right = '<span class="s-val">›</span>';
+        } else if (it.type === 'button') {
+            right = '<span class="s-val">' + (it.editing ? '‹ 按 A 确认 ›' : '执行') + '</span>';
+        } else {
+            const editing = (i === settingsCur.idx && settingsCur.editing);
+            right = '<span class="s-val' + (editing ? ' editing' : '') + '">' +
+                    (editing ? '‹ ' : '') + escHtml(displayValue(it, data)) +
+                    (editing ? ' ›' : '') + '</span>';
+        }
+
+        html += '<div class="' + cls + '" data-idx="' + i + '">' +
+                '<span class="s-name">' + escHtml(it.name) + '</span>' +
+                (it.nameCn ? '<span class="s-aux">' + escHtml(it.nameCn) + '</span>' : '') +
+                right + '</div>';
+    }
+    if (!items.length) {
+        html = '<div class="settings-row s-readonly"><span class="s-name">（没有可显示的条目）</span></div>';
+    }
+    body.innerHTML = html;
+
+    const foot = document.getElementById('settingsFoot');
+    const it = items[settingsCur.idx];
+    if (it && (it.hint || it.name)) {
+        foot.textContent = it.hint || (it.nameCn ? (it.name + ' — ' + it.nameCn) : it.name);
+    } else {
+        foot.textContent = '—';
+    }
+
+    // 高亮行滚进可视区（列表短时无副作用）
+    if (body.querySelector('.settings-row.active')) {
+        body.querySelector('.settings-row.active').scrollIntoView({ block: 'nearest' });
+    }
+}
+
+// 防注入：菜单里的 name/值都可能带 & <，写进 innerHTML 前必须转义
+function escHtml(s) {
+    return String(s === undefined || s === null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// 把当前内存里的值真正落盘（continuous 项用）
+function flushContinuous(item) {
+    if (!item || !item.continuous) { return; }
+    try {
+        if (window.AndroidBridge && AndroidBridge.flushSetting) {
+            AndroidBridge.flushSetting(item.id);
+        }
+    } catch (e) { console.warn('flush 设置失败:', e); }
+}
+
+// 离开某一行 / 退出设置页时，把这一行没落盘的改动补上
+function flushCurrentRow() {
+    const it = curItems()[settingsCur.idx];
+    if (it && it.continuous && settingsCur.pending[it.id]) {
+        delete settingsCur.pending[it.id];
+        flushContinuous(it);
+    }
+}
+
+function openSettings() {
+    // 进页面时丢掉缓存重新从桥接灌一次 —— 真实值可能在别处改过
+    // （比如回到 ES 改完设置再进来），不能一直用旧的
+    invalidateSettings();
+    settingsCur = { menu: 'root', idx: 0, editing: false, pending: {} };
+    renderSettings();
+}
+
+function settingsNav(key) {
+    const items = curItems();
+
+    if (settingsCur.editing) {
+        // 编辑态：左右改值 + 落盘，上下/进入退出都先退出编辑态
+        const item = items[settingsCur.idx];
+        if (key === 'ArrowLeft' || key === 'ArrowRight') {
+            stepValue(item, key === 'ArrowRight' ? 1 : -1);
+            return;
+        }
+        if (key === 'ArrowUp' || key === 'ArrowDown') {
+            settingsCur.editing = false;
+            renderSettings();
+            // 退出编辑态后继续按普通移动处理，手感跟原生一致
+            settingsNav(key);
+            return;
+        }
+        return;
+    }
+
+    if (key === 'ArrowUp') {
+        settingsCur.idx = Math.max(0, settingsCur.idx - 1);
+        renderSettings();
+    } else if (key === 'ArrowDown') {
+        settingsCur.idx = Math.min(items.length - 1, settingsCur.idx + 1);
+        renderSettings();
+    } else if (key === 'ArrowLeft' || key === 'ArrowRight') {
+        const item = items[settingsCur.idx];
+        if (!item) { return; }
+        // 左右就能改值的项（音量/亮度/调速器）直接在选中态改，手感更顺
+        if (item.type === 'leftright' || item.type === 'toggle') {
+            stepValue(item, key === 'ArrowRight' ? 1 : -1);
+        }
+    }
+}
+
+function stepValue(item, dir) {
+    if (!item || item.readonly) { return; }
+    const data = settingsData();
+
+    if (item.type === 'toggle') {
+        const on = (data[item.id] === true || data[item.id] === 'true');
+        writeSetting(item.id, on ? 'false' : 'true');
+        return;
+    }
+
+    const list = choiceList(item, data);
+    let cur = data[item.id];
+    if (cur === undefined || cur === null) { cur = ''; }
+    cur = String(cur);
+
+    let v;
+    if (list) {
+        let i = list.indexOf(cur);
+        // 当前值不在选项表里（比如自定义主题名）就从头开始，不要乱跳
+        if (i < 0) { i = 0; } else { i = (i + dir + list.length) % list.length; }
+        v = list[i];
+    } else if (item.step) {
+        let n = parseFloat(cur);
+        if (!isFinite(n)) { n = item.min || 0; }
+        n += dir * (item.step || 1);
+        if (item.min !== undefined) { n = Math.max(item.min, n); }
+        if (item.max !== undefined) { n = Math.min(item.max, n); }
+        v = String(Math.round(n));
+    } else {
+        return;
+    }
+    writeSetting(item.id, v);
+}
+
+// 写一项设置。continuous 的走"只改内存 + 记 pending"，其余立即落盘。
+// 注意：不管连不连续调节，**缓存都要立刻写上** —— 界面显示的永远是这份
+// 缓存，不写就会出现"桥接收到了但屏幕还显示旧值"。
+function writeSetting(key, value) {
+    const item = curItems().filter(function (x) { return x.id === key; })[0];
+    const cont = item && item.continuous;
+
+    const data = settingsData();
+    data[key] = value;
+
+    try {
+        if (window.AndroidBridge && AndroidBridge.setSetting) {
+            AndroidBridge.setSetting(key, value, !cont);
+        }
+    } catch (e) { console.warn('写设置失败:', e); }
+    if (cont) { settingsCur.pending[key] = 1; }
+    renderSettings();
+}
+
+// 按 A：进入子菜单 / 进入编辑态 / 执行动作
+function settingsConfirm() {
+    const item = curItems()[settingsCur.idx];
+    if (!item) { return; }
+
+    if (item.type === 'menu') {
+        settingsCur.menu = item.menu;
+        settingsCur.idx = 0;
+        settingsCur.editing = false;
+        renderSettings();
+        return;
+    }
+
+    if (item.type === 'button') {
+        // 二次确认：危险动作不能一按就执行
+        if (!settingsCur.editing) {
+            settingsCur.editing = true;
+            renderSettings();
+            return;
+        }
+        settingsCur.editing = false;
+        doAction(item.action);
+        renderSettings();
+        return;
+    }
+
+    if (item.readonly) { return; }
+
+    // 普通值项：第一次 A 进编辑态，再按 A 落盘（continuous 项此时才 flush）
+    if (item.type === 'toggle') {
+        stepValue(item, 1);
+        return;
+    }
+    if (!settingsCur.editing) {
+        settingsCur.editing = true;
+        renderSettings();
+    } else {
+        settingsCur.editing = false;
+        flushCurrentRow();
+        renderSettings();
+    }
+}
+
+// 按 B：编辑态先退出，否则退回上一级
+function settingsBack() {
+    if (settingsCur.editing) {
+        settingsCur.editing = false;
+        renderSettings();
+        return;
+    }
+    if (settingsCur.menu !== 'root') {
+        // 子菜单退回主菜单，尽量把光标停回原来那一项
+        const parent = (settingsCur.menu === 'perf' || settingsCur.menu === 'sound' ||
+                        settingsCur.menu === 'ui' || settingsCur.menu === 'scrsv' ||
+                        settingsCur.menu === 'adv' || settingsCur.menu === 'info' ||
+                        settingsCur.menu === 'quit') ? 'root' : 'root';
+        let backIdx = 0;
+        SETTINGS_MENU[parent].items.forEach(function (it, i) {
+            if (it.menu === settingsCur.menu) { backIdx = i; }
+        });
+        settingsCur.menu = parent;
+        settingsCur.idx = backIdx;
+        renderSettings();
+        return;
+    }
+    flushCurrentRow();
+    showPage('home');
+}
+
+// 真正执行的动作。走 executeShellCommand —— 宿主会写一张一次性脚本到
+// 重启请求目录然后退出前端，跟"点游戏"是一条路。
+function doAction(action) {
+    const CMD = {
+        restart_es: 'systemctl restart emulationstation',
+        shutdown:   'shutdown -h now',
+        reboot:     'reboot'
+    };
+    const cmd = CMD[action];
+    if (!cmd) { return; }
+    const foot = document.getElementById('settingsFoot');
+    if (foot) { foot.textContent = '正在执行：' + cmd; }
+    try {
+        if (window.AndroidBridge && AndroidBridge.executeShellCommand) {
+            AndroidBridge.executeShellCommand(cmd);
+        }
+    } catch (e) { console.warn('执行动作失败:', e); }
+}
+
+// 系统信息（本地能拿到的部分；内核/固件版本由宿主日志补）
+function buildInfoItems() {
+    const data = settingsData();
+    const items = [];
+    items.push({ id: 'i_res', name: 'SCREEN', nameCn: '屏幕', type: 'readonly',
+                 raw: window.innerWidth + '×' + window.innerHeight });
+    items.push({ id: 'i_vol', name: 'VOLUME', nameCn: '当前音量', type: 'readonly',
+                 raw: (data.volume >= 0 ? data.volume + '%' : '不可用') });
+    items.push({ id: 'i_bl',  name: 'BACKLIGHT', nameCn: '当前亮度', type: 'readonly',
+                 raw: (data.brightness >= 0 ? data.brightness + '%（最大 ' + data.brightness_max + '）' : '不可用') });
+    items.push({ id: 'i_cpu', name: 'CPU GOVERNOR', nameCn: 'CPU 调速器', type: 'readonly', raw: data.cpu_governor });
+    items.push({ id: 'i_gpu', name: 'GPU GOVERNOR', nameCn: 'GPU 调速器', type: 'readonly', raw: data.gpu_governor });
+    items.push({ id: 'i_dmc', name: 'DMC GOVERNOR', nameCn: '内存调速器', type: 'readonly', raw: data.dmc_governor });
+    items.push({ id: 'i_root', name: 'ROM ROOT', nameCn: 'ROM 根目录', type: 'readonly',
+                 raw: window.AndroidBridge && AndroidBridge.getRomRoot ? AndroidBridge.getRomRoot() : '' });
+    return items;
+}
+
+function showPage(page) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page' + page.charAt(0).toUpperCase() + page.slice(1)).classList.add('active');
+    // 列表页显示出来了才能量到网格宽度（.page 隐藏时 clientWidth 是 0）
+    if (page === 'games') { syncCardMetrics(0); }
+    if (page === 'settings') {
+        // 系统信息是现算的（分辨率会变），进页面时重建一次
+        SETTINGS_MENU.info.items = buildInfoItems();
+        openSettings();
+    }
+}
+
+function showGames(platform) {
+    renderGames(platform);
+    showPage('games');
+}
+
+// 分类切换
+document.getElementById('catTabs').addEventListener('click', (e) => {
+    if (e.target.classList.contains('cat-tab')) {
+        document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+        e.target.classList.add('active');
+        renderPlatforms(e.target.dataset.cat);
+    }
+});
+
+// 键盘导航
+let currentFocus = { page: 'home', index: 2 };
+
+document.addEventListener('keydown', (e) => {
+    const activePage = document.querySelector('.page.active').id;
+    
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        handleNavigation(e.key, activePage);
+    } else if (e.key === 'Enter' || e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        handleConfirm(activePage);
+    } else if (e.key === 'Escape' || e.key === 'b' || e.key === 'B') {
+        e.preventDefault();
+        handleBack(activePage);
+    } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault();
+        showPage('search');
+    } else if (e.key === 'Start') {
+        e.preventDefault();
+        showPage('settings');
+    }
+});
+
+function handleNavigation(key, page) {
+    if (page === 'pageHome') {
+        const cards = document.querySelectorAll('.platform-card');
+        let idx = Array.from(cards).findIndex(c => c.classList.contains('active'));
+        if (idx < 0) idx = 0;
+        const cols = 3;   // = .platform-grid 的列数，改了要同步
+        if (key === 'ArrowRight') idx = Math.min(idx + 1, cards.length - 1);
+        if (key === 'ArrowLeft') idx = Math.max(idx - 1, 0);
+        if (key === 'ArrowDown') idx = Math.min(idx + cols, cards.length - 1);
+        if (key === 'ArrowUp') idx = Math.max(idx - cols, 0);
+        cards.forEach(c => c.classList.remove('active'));
+        if (cards[idx]) {
+            cards[idx].classList.add('active');
+            cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    } else if (page === 'pageGames') {
+        let cards = document.querySelectorAll('.game-card');
+        let idx = Array.from(cards).findIndex(c => c.classList.contains('active'));
+        if (idx < 0) idx = 0;
+        const cols = GAME_COLS;   // = .game-chunk 的列数
+        const step = (key === 'ArrowDown') ? cols : 1;
+        const back = (key === 'ArrowUp') ? cols : 1;
+        // 分片渲染：目标可能落在还没追加的那一片里，先把片补出来再算下标
+        if (key === 'ArrowRight' || key === 'ArrowDown') {
+            let guard = 0;
+            while (idx + step >= cards.length && gameRenderState.rendered < gameRenderState.games.length && guard++ < 40) {
+                appendGameChunk();
+                cards = document.querySelectorAll('.game-card');
+            }
+        }
+        if (key === 'ArrowRight') idx = Math.min(idx + 1, cards.length - 1);
+        if (key === 'ArrowLeft') idx = Math.max(idx - 1, 0);
+        if (key === 'ArrowDown') idx = Math.min(idx + cols, cards.length - 1);
+        if (key === 'ArrowUp') idx = Math.max(idx - cols, 0);
+        // 只摘掉当前高亮那一张的 active，别对全部卡片 forEach ——
+        // 列表滚到后面时 cards 有几千个，每次按键全量遍历这一下就是明显的卡顿。
+        const prevActive = document.querySelector('.game-card.active');
+        if (prevActive) { prevActive.classList.remove('active'); }
+        if (cards[idx]) {
+            cards[idx].classList.add('active');
+            cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    } else if (page === 'pageSearch') {
+        const keys = document.querySelectorAll('.keyboard-key');
+        let idx = Array.from(keys).findIndex(k => k.classList.contains('active'));
+        if (idx < 0) idx = 0;
+        const cols = 10;
+        if (key === 'ArrowRight') idx = Math.min(idx + 1, keys.length - 1);
+        if (key === 'ArrowLeft') idx = Math.max(idx - 1, 0);
+        if (key === 'ArrowDown') idx = Math.min(idx + cols, keys.length - 1);
+        if (key === 'ArrowUp') idx = Math.max(idx - cols, 0);
+        keys.forEach(k => k.classList.remove('active'));
+        if (keys[idx]) keys[idx].classList.add('active');
+    } else if (page === 'pageSettings') {
+        settingsNav(key);
+    }
+}
+
+function handleConfirm(page) {
+    if (page === 'pageHome') {
+        const active = document.querySelector('.platform-card.active');
+        if (active) active.click();
+    } else if (page === 'pageGames') {
+        const active = document.querySelector('.game-card.active');
+        if (active) {
+            // 模拟启动游戏
+            const gameName = active.querySelector('.game-cover').textContent;
+            console.log('启动游戏:', gameName);
+        }
+    } else if (page === 'pageSearch') {
+        const active = document.querySelector('.keyboard-key.active');
+        if (active) {
+            const key = active.dataset.key;
+            const input = document.getElementById('searchInput');
+            if (key === 'back') {
+                if (input.textContent !== '输入首字母或关键词...' && input.textContent.length > 0) {
+                    input.textContent = input.textContent.slice(0, -1);
+                }
+                if (input.textContent === '') input.textContent = '输入首字母或关键词...';
+            } else if (key === 'clear') {
+                input.textContent = '输入首字母或关键词...';
+            } else if (key === 'search') {
+                // 执行搜索
+                console.log('搜索:', input.textContent);
+            } else {
+                if (input.textContent === '输入首字母或关键词...') input.textContent = '';
+                input.textContent += key;
+            }
+        }
+    } else if (page === 'pageSettings') {
+        settingsConfirm();
+    }
+}
+
+function handleBack(page) {
+    if (page === 'pageSettings') {
+        settingsBack();
+        return;
+    }
+    if (page === 'pageGames' || page === 'pageSearch') {
+        showPage('home');
+    }
+}
+
+// 切换分类
+function switchCategory(direction) {
+    const tabs = document.querySelectorAll('.cat-tab');
+    let idx = Array.from(tabs).findIndex(t => t.classList.contains('active'));
+    if (idx < 0) idx = 0;
+    if (direction === 'next') idx = (idx + 1) % tabs.length;
+    if (direction === 'prev') idx = (idx - 1 + tabs.length) % tabs.length;
+    tabs.forEach(t => t.classList.remove('active'));
+    tabs[idx].classList.add('active');
+    renderPlatforms(tabs[idx].dataset.cat);
+}
+
+// 自适应分辨率：把设计画布等比铺满屏幕，不留黑边
+// 画布高度固定 1080，宽度按屏幕真实宽高比推导 —— 这样 scaleX 与 scaleY 严格相等，
+// 画面正好铺满，既不裁切也不留黑边。
+// 原实现把宽度写死 1920 再取 min(scaleX, scaleY)：在 1024x768 的 4:3 屏上
+// 算成 1024x576、offsetY=96，上下各留 96px 黑边 —— 这就是"画面不全屏"的根因。
+function adaptResolution() {
+    const designHeight = 1080;
+    const screenWidth = Math.max(1, window.innerWidth);
+    const screenHeight = Math.max(1, window.innerHeight);
+    const container = document.getElementById('designContainer');
+
+    if (!container) return;
+
+    // 按屏幕比例推导画布宽度；夹在合理区间，避免极端比例把布局压扁
+    let designWidth = designHeight * screenWidth / screenHeight;
+    designWidth = Math.max(1024, Math.min(2560, designWidth));
+
+    container.style.width = designWidth + 'px';
+    container.style.height = designHeight + 'px';
+
+    // 两个方向共用一个比例：宽度方向的零头由画布宽度吸收
+    const scale = screenHeight / designHeight;
+    container.style.transform = `scale(${scale})`;
+    container.style.left = '0px';
+    container.style.top = '0px';
+
+    console.log(`Resolution: ${screenWidth}x${screenHeight}, Design: ${Math.round(designWidth)}x${designHeight}, Scale: ${scale.toFixed(4)}`);
+
+    // 卡片高度是"按网格宽度算出来的"，画布尺寸一变必须重算。
+    // 注意要放在这里、而不是另挂一个 resize 监听 —— 后者的注册顺序更早，
+    // 会在 adaptResolution 改完宽度之前就用旧宽度算一遍。
+    syncCardMetrics(0);
+}
+
+// 初始化
+adaptResolution();
+window.addEventListener('resize', adaptResolution);
+renderPlatforms();
+syncCardMetrics(0);
+renderKeyboard();
+
+// 手柄按键处理（供Native层调用）
+function handlePad(btn, action) {
+    // 兼容只传一个参数的情况（默认是down）
+    if (action === undefined) action = 'down';
+    if (action !== 'down') return;
+    
+    const activePage = document.querySelector('.page.active').id;
+    console.log('handlePad:', btn, action, 'page:', activePage);
+    
+    // 方向键映射：u/d/l/r -> ArrowUp/ArrowDown/ArrowLeft/ArrowRight
+    const dirMap = {
+        'u': 'ArrowUp',
+        'd': 'ArrowDown',
+        'l': 'ArrowLeft',
+        'r': 'ArrowRight',
+        'dpad_up': 'ArrowUp',
+        'dpad_down': 'ArrowDown',
+        'dpad_left': 'ArrowLeft',
+        'dpad_right': 'ArrowRight'
+    };
+    
+    if (dirMap[btn]) {
+        handleNavigation(dirMap[btn], activePage);
+    } else if (btn === 'a') {
+        handleConfirm(activePage);
+    } else if (btn === 'b') {
+        handleBack(activePage);
+    } else if (btn === 'x') {
+        // X键收藏
+        if (activePage === 'pageGames') {
+            const active = document.querySelector('.game-card.active');
+            if (active) {
+                console.log('收藏游戏');
+            }
+        }
+    } else if (btn === 'y') {
+        showPage('search');
+    } else if (btn === 'start') {
+        showPage('settings');
+    } else if (btn === 'lb' || btn === 'l1') {
+        // L键切换分类（上一个）
+        if (activePage === 'pageHome') {
+            switchCategory('prev');
+        }
+    } else if (btn === 'rb' || btn === 'r1') {
+        // R键切换分类（下一个）
+        if (activePage === 'pageHome') {
+            switchCategory('next');
+        }
+    }
+}
+
+// 兼容旧版接口
+window.vagaPad = function(btn) {
+    handlePad(btn, 'down');
+};
+
+// 供Native层调用的扫描完成回调
+window.onScanComplete = function() {};
+window.onStoragePermissionGranted = function() {};
+</script>
+</div>
+</body>
+</html>

@@ -1,0 +1,1522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>VagaRetro</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+}
+
+:root {
+    --bg: #0a0e1a;
+    --bg2: #0d1322;
+    --panel: #121a30;
+    --panel2: #18213c;
+    --accent: #4f8cff;
+    --accent2: #35e0b0;
+    --gold: #ffc24d;
+    --danger: #ff5b6a;
+    --ok: #43d17c;
+    --text: #eaf0fb;
+    --subtext: #8e99b4;
+    --dim: #5f6b87;
+    --line: #22304f;
+    --line2: #2c3d63;
+}
+
+body {
+    width: 100vw;
+    height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    overflow: hidden;
+    position: relative;
+    margin: 0;
+    padding: 0;
+}
+
+/* 设计尺寸容器 */
+.design-container {
+    width: 1920px;
+    height: 1080px;
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: top left;
+    overflow: hidden;
+}
+
+/* 背景渐变 */
+body::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+        radial-gradient(ellipse at 20% 0%, rgba(79, 140, 255, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 100%, rgba(53, 224, 176, 0.06) 0%, transparent 50%);
+    pointer-events: none;
+}
+
+/* 主容器 */
+.app {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    z-index: 1;
+}
+
+/* 顶部栏 */
+.topbar {
+    display: flex;
+    align-items: center;
+    padding: 30px 48px 32px 48px;
+    flex-shrink: 0;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.logo-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #1a2744 0%, #0d1526 100%);
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 38px;
+    font-weight: bold;
+    color: var(--accent);
+}
+
+.logo-text {
+    font-size: 48px;
+    font-weight: bold;
+    background: linear-gradient(90deg, #6a9fff 0%, #35e0b0 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.searchbox {
+    flex: 1;
+    max-width: 520px;
+    margin: 0 auto;
+    height: 60px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    gap: 14px;
+    color: var(--dim);
+    font-size: 24px;
+}
+
+.searchbox svg {
+    width: 26px;
+    height: 26px;
+    fill: var(--dim);
+}
+
+.status {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    color: var(--subtext);
+    font-size: 24px;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.status-icon {
+    width: 28px;
+    height: 28px;
+    color: var(--subtext);
+    opacity: 0.8;
+}
+
+.time {
+    text-align: right;
+}
+
+.time-main {
+    font-size: 44px;
+    font-weight: bold;
+    color: var(--text);
+    line-height: 1;
+}
+
+.time-sub {
+    font-size: 18px;
+    color: var(--subtext);
+    margin-top: 2px;
+}
+
+/* 分类标签栏 */
+.cat-tabs {
+    display: flex;
+    gap: 20px;
+    padding: 0 48px 16px 48px;
+    flex-shrink: 0;
+}
+
+.cat-tab {
+    padding: 16px 36px;
+    border-radius: 28px;
+    font-size: 26px;
+    color: var(--subtext);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.cat-tab.active {
+    background: linear-gradient(90deg, #4f8cff 0%, #3a6fd6 100%);
+    color: white;
+    font-weight: bold;
+    border-color: transparent;
+}
+
+/* 标题区域 */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 48px 24px 48px;
+    flex-shrink: 0;
+}
+
+.header-left h1 {
+    font-size: 56px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 10px;
+}
+
+.header-left p {
+    font-size: 24px;
+    color: var(--subtext);
+}
+
+/* 音乐播放器 */
+.music-player {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: linear-gradient(135deg, #1a2744 0%, #151d33 100%);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 10px 16px;
+    min-width: 360px;
+}
+
+.music-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+.music-info {
+    flex: 1;
+    overflow: hidden;
+}
+
+.music-name {
+    font-size: 15px;
+    color: var(--subtext);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.music-btns {
+    display: flex;
+    gap: 8px;
+}
+
+.music-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    border: none;
+    color: var(--subtext);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+}
+
+.music-btn.play {
+    background: var(--accent);
+    color: white;
+}
+
+/* 内容区域 */
+.content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 40px 100px 40px;
+}
+
+.content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.content::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 4px;
+}
+
+/* 平台卡片网格 */
+.platform-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 22px;
+}
+
+.platform-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.platform-card:focus,
+.platform-card.active {
+    border-color: var(--accent);
+    border-width: 3px;
+    box-shadow: 0 0 20px rgba(79, 140, 255, 0.3);
+}
+
+.platform-art {
+    height: 170px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding-left: 28px;
+    overflow: hidden;
+}
+
+.platform-art::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.15) 0%, transparent 60%);
+}
+
+.platform-logo {
+    font-size: 64px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    z-index: 1;
+}
+
+.platform-count {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: rgba(0,0,0,0.55);
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 6px 14px;
+    border-radius: 16px;
+    z-index: 2;
+}
+
+.platform-tag {
+    position: absolute;
+    bottom: 14px;
+    left: 14px;
+    background: rgba(0,0,0,0.5);
+    color: white;
+    font-size: 14px;
+    padding: 5px 12px;
+    border-radius: 12px;
+    z-index: 2;
+}
+
+.platform-meta {
+    padding: 20px 24px 22px 24px;
+}
+
+.platform-name {
+    font-size: 23px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.platform-sub-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.platform-sub {
+    font-size: 16px;
+    color: var(--dim);
+}
+
+.platform-core {
+    display: inline-block;
+    font-size: 15px;
+    color: var(--accent2);
+    background: rgba(53, 224, 176, 0.12);
+    padding: 4px 11px;
+    border-radius: 8px;
+}
+
+/* 平台颜色 */
+.color-history { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+.color-favorite { background: linear-gradient(135deg, #f6d365 0%, #fda085 100%); }
+.color-fc { background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); }
+.color-sfc { background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); }
+.color-gb { background: linear-gradient(135deg, #27ae60 0%, #1e8449 100%); }
+.color-gbc { background: linear-gradient(135deg, #1abc9c 0%, #16a085 100%); }
+.color-gba { background: linear-gradient(135deg, #2980b9 0%, #1f618d 100%); }
+.color-n64 { background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%); }
+.color-ngc { background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); }
+.color-wii { background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%); }
+.color-md { background: linear-gradient(135deg, #e67e22 0%, #d35400 100%); }
+.color-ss { background: linear-gradient(135deg, #1abc9c 0%, #16a085 100%); }
+.color-dc { background: linear-gradient(135deg, #ecf0f1 0%, #bdc3c7 100%); }
+.color-ps { background: linear-gradient(135deg, #34495e 0%, #2c3e50 100%); }
+.color-ps2 { background: linear-gradient(135deg, #2c3e50 0%, #1a252f 100%); }
+.color-psp { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+.color-xbox { background: linear-gradient(135deg, #107c10 0%, #0e6b0e 100%); }
+.color-arcade { background: linear-gradient(135deg, #e74c3c 0%, #922b21 100%); }
+.color-neogeo { background: linear-gradient(135deg, #f39c12 0%, #d68910 100%); }
+.color-android { background: linear-gradient(135deg, #3ddc84 0%, #34a853 100%); }
+
+/* 游戏列表 */
+.game-header {
+    margin-bottom: 24px;
+}
+
+.game-header h1 {
+    font-size: 40px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.game-header .info {
+    font-size: 15px;
+    color: var(--subtext);
+    display: flex;
+    gap: 20px;
+}
+
+.game-header .info span {
+    color: var(--dim);
+}
+
+.game-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+}
+
+.game-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s;
+    aspect-ratio: 3/4;
+}
+
+.game-card:focus,
+.game-card.active {
+    border-color: var(--accent);
+    border-width: 3px;
+    box-shadow: 0 0 20px rgba(79, 140, 255, 0.3);
+}
+
+.game-cover {
+    width: 100%;
+    height: 100%;
+    background: var(--bg2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--dim);
+    font-size: 14px;
+    position: relative;
+    overflow: hidden;
+}
+
+.game-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.game-cover .game-name-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    color: white;
+    font-size: 13px;
+    padding: 20px 8px 8px 8px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 底部操作栏容器（固定在视口底部） */
+.padbar-container {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+/* 底部操作栏 */
+.padbar {
+    display: flex;
+    gap: 18px;
+    background: rgba(11, 17, 32, 0.95);
+    border: 1px solid var(--line2);
+    border-radius: 24px;
+    padding: 18px 36px;
+    margin-bottom: 24px;
+}
+
+.pad-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 24px;
+    color: var(--subtext);
+}
+
+.pad-key {
+    padding: 8px 18px;
+    border-radius: 10px;
+    font-weight: bold;
+    color: white;
+    font-size: 22px;
+}
+
+.key-select { background: #5a6478; }
+.key-a { background: #f5a623; }
+.key-b { background: #e74c3c; }
+.key-x { background: #3498db; }
+.key-lr { background: #9b59b6; }
+.key-y { background: #2ecc71; }
+.key-start { background: #34495e; }
+
+/* 设置页面 */
+.settings-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 40px;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.settings-title {
+    font-size: 32px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 30px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.settings-group {
+    margin-bottom: 30px;
+}
+
+.settings-label {
+    font-size: 16px;
+    color: var(--subtext);
+    margin-bottom: 12px;
+}
+
+.settings-value {
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 20px;
+    font-size: 17px;
+    color: var(--text);
+}
+
+.settings-options {
+    display: flex;
+    gap: 12px;
+}
+
+.settings-option {
+    padding: 14px 28px;
+    border-radius: 12px;
+    font-size: 17px;
+    color: var(--subtext);
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.settings-option.active {
+    background: linear-gradient(90deg, var(--accent) 0%, #3a6fd6 100%);
+    color: var(--text);
+    font-weight: bold;
+    border-color: transparent;
+}
+
+.settings-desc {
+    font-size: 14px;
+    color: var(--dim);
+    margin-top: 10px;
+}
+
+/* 搜索界面 */
+.search-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 40px;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.search-title {
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--accent2);
+    margin-bottom: 20px;
+}
+
+.search-input-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 30px;
+}
+
+.search-input {
+    flex: 1;
+    height: 56px;
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 0 20px;
+    font-size: 18px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+}
+
+.search-result-count {
+    font-size: 18px;
+    color: var(--subtext);
+}
+
+.keyboard {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 10px;
+}
+
+.keyboard-key {
+    height: 60px;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.keyboard-key:focus,
+.keyboard-key.active {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.keyboard-key.action {
+    color: var(--danger);
+}
+
+.keyboard-hint {
+    text-align: center;
+    margin-top: 30px;
+    font-size: 14px;
+    color: var(--dim);
+}
+
+/* 页面切换 */
+.page {
+    display: none;
+}
+
+.page.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+
+/* 返回按钮 */
+.back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--accent);
+    font-size: 16px;
+    cursor: pointer;
+    margin-bottom: 20px;
+}
+</style>
+</head>
+<body>
+<div class="design-container" id="designContainer">
+<div class="app">
+    <!-- 顶部栏 -->
+    <div class="topbar">
+        <div class="logo">
+            <div class="logo-icon">V</div>
+            <div class="logo-text">VagaRetro</div>
+        </div>
+        <div class="searchbox" onclick="showPage('search')">
+            <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <span>搜索</span>
+        </div>
+        <div class="status">
+            <div class="status-item">
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z" fill="currentColor"/>
+                </svg>
+                <span>3</span>
+            </div>
+            <div class="status-item">
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z" fill="currentColor"/>
+                </svg>
+                <span>53%</span>
+            </div>
+            <div class="time">
+                <div class="time-main">12:43</div>
+                <div class="time-sub">2026-09-12 六</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 分类标签栏 -->
+    <div class="cat-tabs" id="catTabs">
+        <div class="cat-tab active" data-cat="all">全部 20</div>
+        <div class="cat-tab" data-cat="nintendo">任天堂 7</div>
+        <div class="cat-tab" data-cat="sega">世嘉 2</div>
+        <div class="cat-tab" data-cat="sony">索尼 3</div>
+        <div class="cat-tab" data-cat="microsoft">微软 0</div>
+        <div class="cat-tab" data-cat="arcade">街机 6</div>
+        <div class="cat-tab" data-cat="handheld">掌机 2</div>
+        <div class="cat-tab" data-cat="android">安卓APP</div>
+    </div>
+
+    <!-- 主页 -->
+    <div class="page active" id="pageHome">
+        <div class="header">
+            <div class="header-left">
+                <h1>全部机种</h1>
+                <p>20 个平台 · 共 6109 款游戏</p>
+            </div>
+            <div class="music-player">
+                <div class="music-icon">♪</div>
+                <div class="music-info">
+                    <div class="music-name">未播放音乐</div>
+                </div>
+                <div class="music-btns">
+                    <button class="music-btn">⏮</button>
+                    <button class="music-btn play">▶</button>
+                    <button class="music-btn">⏭</button>
+                </div>
+            </div>
+        </div>
+        <div class="content">
+            <div class="platform-grid" id="platformGrid">
+                <!-- 平台卡片由JS生成 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏列表页 -->
+    <div class="page" id="pageGames">
+        <div class="content" style="padding-top: 20px;">
+            <div class="back-btn" onclick="showPage('home')">← 返回</div>
+            <div class="game-header">
+                <h1 id="gamePlatformName">Game Boy Advance</h1>
+                <div class="info">
+                    <span>厂商</span> 任天堂
+                    <span>分组</span> 任天堂
+                    <span>扩展名</span> gba, agb
+                    <span>RA 核心</span> mgba / vba_m
+                </div>
+            </div>
+            <div class="game-grid" id="gameGrid">
+                <!-- 游戏卡片由JS生成 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置页 -->
+    <div class="page" id="pageSettings">
+        <div class="content" style="padding-top: 20px;">
+            <div class="back-btn" onclick="showPage('home')">← 返回</div>
+            <div class="settings-panel">
+                <div class="settings-title">⚙ 设置</div>
+                
+                <div class="settings-group">
+                    <div class="settings-label">运行模式</div>
+                    <div class="settings-value">Android 掌机（读取游戏卡 + 直接调用 RetroArch）</div>
+                </div>
+
+                <div class="settings-group">
+                    <div class="settings-label">界面布局</div>
+                    <div class="settings-options">
+                        <div class="settings-option active">自动适配</div>
+                        <div class="settings-option">4:3 方屏</div>
+                        <div class="settings-option">16:9 宽屏</div>
+                        <div class="settings-option">3:2 方宽屏</div>
+                    </div>
+                    <div class="settings-desc">自动适配按屏幕比例切换；手动选择可强制使用指定布局。</div>
+                </div>
+
+                <div class="settings-group">
+                    <div class="settings-label">界面主题</div>
+                    <div class="settings-options">
+                        <div class="settings-option active">默认深色</div>
+                        <div class="settings-option">WP10 磁贴</div>
+                    </div>
+                    <div class="settings-desc">切换前端整体视觉风格，立即生效。</div>
+                </div>
+
+                <div class="settings-group">
+                    <div class="settings-label">ROM 文件夹（游戏卡根目录）</div>
+                    <div class="settings-value">/storage/971F-B50A/Roms/</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 搜索页 -->
+    <div class="page" id="pageSearch">
+        <div class="content" style="padding-top: 20px;">
+            <div class="back-btn" onclick="showPage('home')">← 返回</div>
+            <div class="search-panel">
+                <div class="search-title">搜索游戏</div>
+                <div class="search-input-row">
+                    <div class="search-input" id="searchInput">输入首字母或关键词...</div>
+                    <div class="search-result-count">0 款</div>
+                </div>
+                <div class="keyboard" id="keyboard">
+                    <!-- 键盘由JS生成 -->
+                </div>
+                <div class="keyboard-hint">方向键选字母/结果 · A 输入/启动 · B 删除/返回 · ↓ 进入结果 ↑ 回键盘 · START 清空</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 底部操作栏（固定在视口底部，不随内容滚动） -->
+<div class="padbar-container">
+    <div class="padbar" id="padbar">
+        <div class="pad-item"><span class="pad-key key-select">◇</span> 选择</div>
+        <div class="pad-item"><span class="pad-key key-a">A</span> 确认</div>
+        <div class="pad-item"><span class="pad-key key-b">B</span> 返回</div>
+        <div class="pad-item"><span class="pad-key key-x">X</span> 收藏</div>
+        <div class="pad-item"><span class="pad-key key-lr">L R</span> 切换</div>
+        <div class="pad-item"><span class="pad-key key-y">Y</span> 搜索</div>
+        <div class="pad-item"><span class="pad-key key-start">START</span> 设置</div>
+    </div>
+</div>
+
+<script>
+// 平台数据
+const platforms = [
+    { id: 'history', name: '游玩历史', sub: 'RECENT', core: '最近30款', count: 0, tag: '最近游玩', color: 'color-history', logo: '历史', cat: 'all' },
+    { id: 'favorite', name: '我的收藏', sub: 'FAVORITES', core: '收藏置顶', count: 0, tag: 'X键收藏', color: 'color-favorite', logo: '收藏', cat: 'all' },
+    { id: 'FC', name: 'FC / NES 红白机', sub: '任天堂', core: 'nestopia', count: 926, tag: '任天堂', color: 'color-fc', logo: 'FC', cat: 'nintendo' },
+    { id: 'SFC', name: 'SFC / SNES 超任', sub: '任天堂', core: 'snes9x', count: 818, tag: '任天堂', color: 'color-sfc', logo: 'SFC', cat: 'nintendo' },
+    { id: 'GB', name: 'Game Boy', sub: '任天堂', core: 'gambatte', count: 776, tag: '任天堂', color: 'color-gb', logo: 'GB', cat: 'handheld' },
+    { id: 'GBC', name: 'Game Boy Color', sub: '任天堂', core: 'gambatte', count: 484, tag: '任天堂', color: 'color-gbc', logo: 'GBC', cat: 'handheld' },
+    { id: 'GBA', name: 'Game Boy Advance', sub: '任天堂', core: 'mgba', count: 459, tag: '任天堂', color: 'color-gba', logo: 'GBA', cat: 'nintendo' },
+    { id: 'NDS', name: 'Nintendo DS', sub: '任天堂', core: 'desmume', count: 280, tag: '任天堂', color: 'color-nds', logo: 'NDS', cat: 'nintendo' },
+    { id: 'MD', name: 'Mega Drive', sub: '世嘉', core: 'genesis_plus_gx', count: 520, tag: '世嘉', color: 'color-md', logo: 'MD', cat: 'sega' },
+    { id: 'SS', name: 'Saturn', sub: '世嘉', core: 'yabause', count: 180, tag: '世嘉', color: 'color-ss', logo: 'SS', cat: 'sega' },
+    { id: 'DC', name: 'Dreamcast', sub: '世嘉', core: 'flycast', count: 95, tag: '世嘉', color: 'color-dc', logo: 'DC', cat: 'sega' },
+    { id: 'PS1', name: 'PlayStation', sub: '索尼', core: 'pcsx_rearmed', count: 650, tag: '索尼', color: 'color-ps', logo: 'PS', cat: 'sony' },
+    { id: 'PSP', name: 'PlayStation Portable', sub: '索尼', core: 'ppsspp', count: 280, tag: '索尼', color: 'color-psp', logo: 'PSP', cat: 'sony' },
+    { id: 'DOS', name: 'DOS', sub: '电脑', core: 'dosbox', count: 120, tag: '电脑', color: 'color-dos', logo: 'DOS', cat: 'computer' },
+    { id: 'PCE', name: 'PC Engine', sub: 'NEC', core: 'mednafen_pce', count: 80, tag: 'NEC', color: 'color-pce', logo: 'PCE', cat: 'other' },
+    { id: 'NGPC', name: 'Neo Geo Pocket Color', sub: 'SNK', core: 'mednafen_ngp', count: 50, tag: 'SNK', color: 'color-ngpc', logo: 'NGPC', cat: 'handheld' },
+    { id: 'WS', name: 'WonderSwan', sub: '万代', core: 'mednafen_wswan', count: 60, tag: '万代', color: 'color-ws', logo: 'WS', cat: 'handheld' },
+    { id: 'WSC', name: 'WonderSwan Color', sub: '万代', core: 'mednafen_wswan', count: 40, tag: '万代', color: 'color-wsc', logo: 'WSC', cat: 'handheld' },
+    { id: 'GG', name: 'Game Gear', sub: '世嘉', core: 'genesis_plus_gx', count: 100, tag: '世嘉', color: 'color-gg', logo: 'GG', cat: 'handheld' },
+    { id: 'NAOMI', name: 'NAOMI', sub: '街机', core: 'flycast', count: 30, tag: '街机', color: 'color-naomi', logo: 'NAOMI', cat: 'arcade' },
+];
+
+// 游戏示例数据
+const sampleGames = [
+    '魂斗罗', '超级马里奥', '塞尔达传说', '口袋妖怪', '恶魔城',
+    '银河战士', '火焰纹章', '星之卡比', '瓦里奥', '大金刚',
+    '马里奥赛车', '任天堂明星大乱斗', '动物森友会', 'Splatoon', 'ARMS',
+    '1-2-Switch', '超级马里奥奥德赛', '异度神剑', '猎天使魔女', '勇者斗恶龙'
+];
+
+// 渲染平台卡片
+function renderPlatforms(cat = 'all') {
+    const grid = document.getElementById('platformGrid');
+    const filtered = cat === 'all' ? platforms : platforms.filter(p => p.cat === cat);
+    grid.innerHTML = filtered.map((p, i) => `
+        <div class="platform-card ${i === 2 ? 'active' : ''}" data-id="${p.id}" tabindex="0">
+            <div class="platform-art ${p.color}">
+                <div class="platform-logo">${p.logo}</div>
+                <div class="platform-count">${p.count} 款</div>
+                <div class="platform-tag">${p.tag}</div>
+            </div>
+            <div class="platform-meta">
+                <div class="platform-name">${p.name}</div>
+                <div class="platform-sub-row">
+                    <span class="platform-sub">${p.sub}</span>
+                    <span class="platform-core">${p.core}</span>
+                </div>
+            </div>
+        </div>
+    `).join('');
+
+    // 绑定点击事件
+    grid.querySelectorAll('.platform-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const id = card.dataset.id;
+            const platform = platforms.find(p => p.id === id);
+            if (platform) {
+                showGames(platform);
+            }
+        });
+    });
+}
+
+// 游戏列表缓存
+const gameListCache = {};
+
+// 解析Pegasus格式metadata.pegasus.txt
+function parsePegasusMetadata(text, platformDir) {
+    const games = [];
+    const lines = text.split('\n');
+    let currentGame = null;
+    let launchCmd = '';
+    let inLaunch = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        
+        if (trimmed.startsWith('collection:')) {
+            continue;
+        } else if (trimmed.startsWith('launch:')) {
+            launchCmd = trimmed.substring('launch:'.length).trim();
+            inLaunch = true;
+            continue;
+        } else if (inLaunch && trimmed.startsWith('-') && !trimmed.startsWith('game:') && !trimmed.startsWith('file:')) {
+            launchCmd += ' ' + trimmed;
+            continue;
+        } else if (trimmed.startsWith('game:')) {
+            if (currentGame) {
+                games.push(currentGame);
+            }
+            currentGame = {
+                name: trimmed.substring('game:'.length).trim(),
+                path: '',
+                image: '',
+                launch: launchCmd,
+                description: '',
+                developer: ''
+            };
+            inLaunch = false;
+        } else if (trimmed.startsWith('file:') && currentGame) {
+            currentGame.path = trimmed.substring('file:'.length).trim();
+            const gameName = currentGame.name;
+            currentGame.image = platformDir + '/media/' + gameName + '/boxFront.jpg';
+        } else if (trimmed.startsWith('developer:') && currentGame) {
+            currentGame.developer = trimmed.substring('developer:'.length).trim();
+        } else if (trimmed.startsWith('description:') && currentGame) {
+            currentGame.description = trimmed.substring('description:'.length).trim();
+        } else if (currentGame && currentGame.description && !trimmed.startsWith(':') && trimmed.length > 0 && !trimmed.startsWith('game:') && !trimmed.startsWith('file:') && !trimmed.startsWith('sort-by:') && !trimmed.startsWith('developer:')) {
+            currentGame.description += ' ' + trimmed;
+        }
+    }
+    if (currentGame) {
+        games.push(currentGame);
+    }
+    return games;
+}
+
+// 解析gamelist.xml
+function parseGameListXml(xmlText, platformDir) {
+    const games = [];
+    try {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+        const gameNodes = xmlDoc.getElementsByTagName('game');
+        for (let i = 0; i < gameNodes.length; i++) {
+            const node = gameNodes[i];
+            const pathNode = node.getElementsByTagName('path')[0];
+            const nameNode = node.getElementsByTagName('name')[0];
+            const imageNode = node.getElementsByTagName('image')[0];
+            const path = pathNode ? pathNode.textContent.trim() : '';
+            const name = nameNode ? nameNode.textContent.trim() : path;
+            let image = imageNode ? imageNode.textContent.trim() : '';
+            if (image && image.startsWith('./')) {
+                image = platformDir + '/' + image.substring(2);
+            } else if (image && !image.startsWith('/')) {
+                image = platformDir + '/' + image;
+            }
+            games.push({ path, name, image, launch: '', description: '', developer: '' });
+        }
+    } catch (e) {
+        console.error('parseGameListXml error:', e);
+    }
+    return games;
+}
+
+// 渲染游戏列表
+async function renderGames(platform) {
+    const grid = document.getElementById('gameGrid');
+    document.getElementById('gamePlatformName').textContent = platform.name;
+    
+    grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 60px; color: var(--dim); font-size: 20px;">加载游戏列表中...</div>';
+    
+    try {
+        let romRoot = '';
+        if (window.AndroidBridge && window.AndroidBridge.getRomRoot) {
+            romRoot = window.AndroidBridge.getRomRoot();
+        }
+        if (!romRoot) {
+            romRoot = '/storage/FBFB-0D4A/Roms';
+        }
+        
+        const platformDir = romRoot + '/' + platform.id;
+        
+        let games = gameListCache[platform.id];
+        if (!games) {
+            games = [];
+            
+            // 先尝试Pegasus格式
+            const pegasusPath = platformDir + '/metadata.pegasus.txt';
+            let pegasusText = '';
+            if (window.AndroidBridge && window.AndroidBridge.readText) {
+                pegasusText = window.AndroidBridge.readText(pegasusPath);
+            }
+            if (pegasusText) {
+                games = parsePegasusMetadata(pegasusText, platformDir);
+            }
+            
+            // 如果Pegasus格式没有游戏，尝试gamelist.xml
+            if (games.length === 0) {
+                const gamelistPath = platformDir + '/gamelist.xml';
+                let xmlText = '';
+                if (window.AndroidBridge && window.AndroidBridge.readText) {
+                    xmlText = window.AndroidBridge.readText(gamelistPath);
+                }
+                if (xmlText) {
+                    games = parseGameListXml(xmlText, platformDir);
+                }
+            }
+            
+            // 如果都没有，扫描目录中的ROM文件
+            if (games.length === 0 && window.AndroidBridge && window.AndroidBridge.listDir) {
+                const exts = ['zip', '7z', 'nes', 'smc', 'sfc', 'gba', 'gbc', 'gb', 'md', 'iso', 'bin', 'cue', 'pbp', 'chd', 'nds', 'pce', 'ngp', 'ngc', 'ws', 'wsc', 'gg', 'exe', 'com', 'bat'];
+                try {
+                    const files = JSON.parse(window.AndroidBridge.listDir(platformDir, exts.join(',')) || '[]');
+                    games = files.map(f => ({
+                        name: f.name.replace(/\.[^/.]+$/, ''),
+                        path: f.name,
+                        image: '',
+                        launch: '',
+                        description: '',
+                        developer: ''
+                    }));
+                } catch (e) {
+                    console.error('listDir error:', e);
+                }
+            }
+            
+            gameListCache[platform.id] = games;
+        }
+        
+        if (games.length === 0) {
+            grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 60px; color: var(--dim); font-size: 20px;">暂无游戏</div>';
+            return;
+        }
+        
+        platform.count = games.length;
+        
+        grid.innerHTML = games.map((g, i) => `
+            <div class="game-card ${i === 0 ? 'active' : ''}" data-index="${i}" data-path="${g.path}" data-launch="${encodeURIComponent(g.launch || '')}" tabindex="0">
+                <div class="game-cover" data-image="${g.image || ''}">
+                    ${g.image ? '' : `<span>${g.name}</span>`}
+                    <div class="game-name-overlay">${g.name}</div>
+                </div>
+            </div>
+        `).join('');
+        
+        loadCovers();
+        
+        // 延迟再次加载封面，确保DOM已更新
+        setTimeout(() => loadCovers(), 100);
+        setTimeout(() => loadCovers(), 500);
+        setTimeout(() => loadCovers(), 1000);
+        
+        grid.querySelectorAll('.game-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const index = parseInt(card.dataset.index);
+                const game = games[index];
+                if (game) {
+                    launchGame(platform, game);
+                }
+            });
+        });
+        
+    } catch (e) {
+        console.error('renderGames error:', e);
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 60px; color: var(--danger); font-size: 20px;">加载失败：' + e.message + '</div>';
+    }
+}
+
+// 加载封面图片
+function loadCovers() {
+    const covers = document.querySelectorAll('.game-cover[data-image]');
+    console.log('loadCovers: found', covers.length, 'covers');
+    let loaded = 0;
+    let failed = 0;
+    let skipped = 0;
+    covers.forEach((cover, index) => {
+        const imagePath = cover.dataset.image;
+        if (!imagePath) {
+            skipped++;
+            return;
+        }
+        const existingImg = cover.querySelector('img');
+        if (existingImg && existingImg.src && existingImg.src.length > 10) {
+            skipped++;
+            return;
+        }
+        // 创建新的img元素
+        const img = existingImg || document.createElement('img');
+        img.alt = '';
+        img.loading = 'lazy';
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';
+        img.onerror = function() {
+            failed++;
+            console.log('loadCovers: direct load failed for', imagePath, 'trying AndroidBridge');
+            // 如果直接加载失败，尝试通过AndroidBridge读取
+            if (window.AndroidBridge && window.AndroidBridge.readMediaDataUrl) {
+                try {
+                    const dataUrl = window.AndroidBridge.readMediaDataUrl(imagePath);
+                    if (dataUrl && dataUrl.length > 100) {
+                        img.src = dataUrl;
+                        loaded++;
+                    } else {
+                        console.log('loadCovers: empty dataUrl for', imagePath, 'len=', dataUrl ? dataUrl.length : 0);
+                    }
+                } catch (e) {
+                    console.error('load cover error:', e, imagePath);
+                }
+            }
+        };
+        img.onload = function() {
+            loaded++;
+        };
+        if (!existingImg) {
+            cover.insertBefore(img, cover.firstChild);
+        }
+        img.src = 'file://' + imagePath;
+        if (index < 3) {
+            console.log('loadCovers: set src for', index, imagePath, 'img.complete=', img.complete, 'img.naturalWidth=', img.naturalWidth);
+        }
+    });
+    console.log('loadCovers: loaded', loaded, 'covers, failed', failed, 'skipped', skipped);
+}
+
+// 启动游戏
+function launchGame(platform, game) {
+    if (!window.AndroidBridge) {
+        alert('启动游戏需要Android环境');
+        return;
+    }
+    
+    const romPath = game.path.startsWith('/') ? game.path : 
+        (window.AndroidBridge.getRomRoot() + '/' + platform.id + '/' + game.path.replace('./', ''));
+    
+    // 如果有Pegasus格式的launch命令，使用它
+    if (game.launch) {
+        const launchCmd = decodeURIComponent(game.launch).replace('{file.path}', romPath);
+        if (window.AndroidBridge.executeShellCommand) {
+            const result = window.AndroidBridge.executeShellCommand(launchCmd);
+            try {
+                const res = JSON.parse(result);
+                if (!res.ok) {
+                    alert(res.message || '启动失败');
+                }
+            } catch (e) {
+                console.error('launchGame shell error:', e);
+            }
+            return;
+        }
+    }
+    
+    // 否则使用默认的launchRetroArch方法
+    if (window.AndroidBridge.launchRetroArch) {
+        const cores = platform.core ? [platform.core] : [];
+        const result = window.AndroidBridge.launchRetroArch(romPath, JSON.stringify(cores), platform.name);
+        try {
+            const res = JSON.parse(result);
+            if (!res.ok) {
+                alert(res.message || '启动失败');
+            }
+        } catch (e) {
+            console.error('launchGame error:', e);
+        }
+    }
+}
+
+// 渲染键盘
+function renderKeyboard() {
+    const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+    const keyboard = document.getElementById('keyboard');
+    keyboard.innerHTML = keys.map((k, i) => `
+        <div class="keyboard-key ${i === 0 ? 'active' : ''}" data-key="${k}">${k}</div>
+    `).join('') + `
+        <div class="keyboard-key action" data-key="back">⌫</div>
+        <div class="keyboard-key action" data-key="clear">清空</div>
+        <div class="keyboard-key action" data-key="search">搜索</div>
+    `;
+}
+
+// 页面切换
+function showPage(page) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page' + page.charAt(0).toUpperCase() + page.slice(1)).classList.add('active');
+}
+
+function showGames(platform) {
+    renderGames(platform);
+    showPage('games');
+}
+
+// 分类切换
+document.getElementById('catTabs').addEventListener('click', (e) => {
+    if (e.target.classList.contains('cat-tab')) {
+        document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+        e.target.classList.add('active');
+        renderPlatforms(e.target.dataset.cat);
+    }
+});
+
+// 键盘导航
+let currentFocus = { page: 'home', index: 2 };
+
+document.addEventListener('keydown', (e) => {
+    const activePage = document.querySelector('.page.active').id;
+    
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        handleNavigation(e.key, activePage);
+    } else if (e.key === 'Enter' || e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        handleConfirm(activePage);
+    } else if (e.key === 'Escape' || e.key === 'b' || e.key === 'B') {
+        e.preventDefault();
+        handleBack(activePage);
+    } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault();
+        showPage('search');
+    } else if (e.key === 'Start') {
+        e.preventDefault();
+        showPage('settings');
+    }
+});
+
+function handleNavigation(key, page) {
+    if (page === 'pageHome') {
+        const cards = document.querySelectorAll('.platform-card');
+        let idx = Array.from(cards).findIndex(c => c.classList.contains('active'));
+        if (idx < 0) idx = 0;
+        const cols = 4;
+        if (key === 'ArrowRight') idx = Math.min(idx + 1, cards.length - 1);
+        if (key === 'ArrowLeft') idx = Math.max(idx - 1, 0);
+        if (key === 'ArrowDown') idx = Math.min(idx + cols, cards.length - 1);
+        if (key === 'ArrowUp') idx = Math.max(idx - cols, 0);
+        cards.forEach(c => c.classList.remove('active'));
+        if (cards[idx]) {
+            cards[idx].classList.add('active');
+            cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    } else if (page === 'pageGames') {
+        const cards = document.querySelectorAll('.game-card');
+        let idx = Array.from(cards).findIndex(c => c.classList.contains('active'));
+        if (idx < 0) idx = 0;
+        const cols = 5;
+        if (key === 'ArrowRight') idx = Math.min(idx + 1, cards.length - 1);
+        if (key === 'ArrowLeft') idx = Math.max(idx - 1, 0);
+        if (key === 'ArrowDown') idx = Math.min(idx + cols, cards.length - 1);
+        if (key === 'ArrowUp') idx = Math.max(idx - cols, 0);
+        cards.forEach(c => c.classList.remove('active'));
+        if (cards[idx]) {
+            cards[idx].classList.add('active');
+            cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    } else if (page === 'pageSearch') {
+        const keys = document.querySelectorAll('.keyboard-key');
+        let idx = Array.from(keys).findIndex(k => k.classList.contains('active'));
+        if (idx < 0) idx = 0;
+        const cols = 10;
+        if (key === 'ArrowRight') idx = Math.min(idx + 1, keys.length - 1);
+        if (key === 'ArrowLeft') idx = Math.max(idx - 1, 0);
+        if (key === 'ArrowDown') idx = Math.min(idx + cols, keys.length - 1);
+        if (key === 'ArrowUp') idx = Math.max(idx - cols, 0);
+        keys.forEach(k => k.classList.remove('active'));
+        if (keys[idx]) keys[idx].classList.add('active');
+    } else if (page === 'pageSettings') {
+        const options = document.querySelectorAll('.settings-option');
+        let idx = Array.from(options).findIndex(o => o.classList.contains('active'));
+        if (idx < 0) idx = 0;
+        if (key === 'ArrowRight' || key === 'ArrowLeft') {
+            // 找到当前选项所在的组
+            const currentGroup = options[idx].closest('.settings-options');
+            const groupOptions = currentGroup.querySelectorAll('.settings-option');
+            let groupIdx = Array.from(groupOptions).findIndex(o => o.classList.contains('active'));
+            if (key === 'ArrowRight') groupIdx = Math.min(groupIdx + 1, groupOptions.length - 1);
+            if (key === 'ArrowLeft') groupIdx = Math.max(groupIdx - 1, 0);
+            groupOptions.forEach(o => o.classList.remove('active'));
+            if (groupOptions[groupIdx]) groupOptions[groupIdx].classList.add('active');
+        }
+    }
+}
+
+function handleConfirm(page) {
+    if (page === 'pageHome') {
+        const active = document.querySelector('.platform-card.active');
+        if (active) active.click();
+    } else if (page === 'pageGames') {
+        const active = document.querySelector('.game-card.active');
+        if (active) {
+            // 模拟启动游戏
+            const gameName = active.querySelector('.game-cover').textContent;
+            console.log('启动游戏:', gameName);
+        }
+    } else if (page === 'pageSearch') {
+        const active = document.querySelector('.keyboard-key.active');
+        if (active) {
+            const key = active.dataset.key;
+            const input = document.getElementById('searchInput');
+            if (key === 'back') {
+                if (input.textContent !== '输入首字母或关键词...' && input.textContent.length > 0) {
+                    input.textContent = input.textContent.slice(0, -1);
+                }
+                if (input.textContent === '') input.textContent = '输入首字母或关键词...';
+            } else if (key === 'clear') {
+                input.textContent = '输入首字母或关键词...';
+            } else if (key === 'search') {
+                // 执行搜索
+                console.log('搜索:', input.textContent);
+            } else {
+                if (input.textContent === '输入首字母或关键词...') input.textContent = '';
+                input.textContent += key;
+            }
+        }
+    } else if (page === 'pageSettings') {
+        const active = document.querySelector('.settings-option.active');
+        if (active) {
+            // 切换选项
+            const group = active.closest('.settings-options');
+            group.querySelectorAll('.settings-option').forEach(o => o.classList.remove('active'));
+            active.classList.add('active');
+            console.log('设置选项:', active.textContent);
+        }
+    }
+}
+
+function handleBack(page) {
+    if (page === 'pageGames' || page === 'pageSettings' || page === 'pageSearch') {
+        showPage('home');
+    }
+}
+
+// 切换分类
+function switchCategory(direction) {
+    const tabs = document.querySelectorAll('.cat-tab');
+    let idx = Array.from(tabs).findIndex(t => t.classList.contains('active'));
+    if (idx < 0) idx = 0;
+    if (direction === 'next') idx = (idx + 1) % tabs.length;
+    if (direction === 'prev') idx = (idx - 1 + tabs.length) % tabs.length;
+    tabs.forEach(t => t.classList.remove('active'));
+    tabs[idx].classList.add('active');
+    renderPlatforms(tabs[idx].dataset.cat);
+}
+
+// 自适应分辨率
+function adaptResolution() {
+    const designWidth = 1920;
+    const designHeight = 1080;
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
+    const container = document.getElementById('designContainer');
+    
+    if (!container) return;
+    
+    // 计算缩放比例，保持宽高比
+    const scaleX = screenWidth / designWidth;
+    const scaleY = screenHeight / designHeight;
+    const scale = Math.min(scaleX, scaleY);
+    
+    // 应用缩放
+    container.style.transform = `scale(${scale})`;
+    
+    // 计算居中偏移
+    const offsetX = (screenWidth - designWidth * scale) / 2;
+    const offsetY = (screenHeight - designHeight * scale) / 2;
+    container.style.left = `${offsetX}px`;
+    container.style.top = `${offsetY}px`;
+    
+    // 底栏在design-container外面，不需要缩放，直接固定在视口底部
+    
+    console.log(`Resolution: ${screenWidth}x${screenHeight}, Scale: ${scale}, Offset: ${offsetX}x${offsetY}`);
+}
+
+// 初始化
+adaptResolution();
+window.addEventListener('resize', adaptResolution);
+renderPlatforms();
+renderKeyboard();
+
+// 手柄按键处理（供Native层调用）
+function handlePad(btn, action) {
+    // 兼容只传一个参数的情况（默认是down）
+    if (action === undefined) action = 'down';
+    if (action !== 'down') return;
+    
+    const activePage = document.querySelector('.page.active').id;
+    console.log('handlePad:', btn, action, 'page:', activePage);
+    
+    // 方向键映射：u/d/l/r -> ArrowUp/ArrowDown/ArrowLeft/ArrowRight
+    const dirMap = {
+        'u': 'ArrowUp',
+        'd': 'ArrowDown',
+        'l': 'ArrowLeft',
+        'r': 'ArrowRight',
+        'dpad_up': 'ArrowUp',
+        'dpad_down': 'ArrowDown',
+        'dpad_left': 'ArrowLeft',
+        'dpad_right': 'ArrowRight'
+    };
+    
+    if (dirMap[btn]) {
+        handleNavigation(dirMap[btn], activePage);
+    } else if (btn === 'a') {
+        handleConfirm(activePage);
+    } else if (btn === 'b') {
+        handleBack(activePage);
+    } else if (btn === 'x') {
+        // X键收藏
+        if (activePage === 'pageGames') {
+            const active = document.querySelector('.game-card.active');
+            if (active) {
+                console.log('收藏游戏');
+            }
+        }
+    } else if (btn === 'y') {
+        showPage('search');
+    } else if (btn === 'start') {
+        showPage('settings');
+    } else if (btn === 'lb' || btn === 'l1') {
+        // L键切换分类（上一个）
+        if (activePage === 'pageHome') {
+            switchCategory('prev');
+        }
+    } else if (btn === 'rb' || btn === 'r1') {
+        // R键切换分类（下一个）
+        if (activePage === 'pageHome') {
+            switchCategory('next');
+        }
+    }
+}
+
+// 兼容旧版接口
+window.vagaPad = function(btn) {
+    handlePad(btn, 'down');
+};
+
+// 供Native层调用的扫描完成回调
+window.onScanComplete = function() {};
+window.onStoragePermissionGranted = function() {};
+</script>
+</div>
+</body>
+</html>
