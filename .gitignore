@@ -30,3 +30,9 @@ __pycache__/
 Thumbs.db
 *~
 *.swp
+
+# ---- 本地改动备份（改 vgfront.c 前的手工副本，只在开发机上留着）----
+*.bak
+*.bak-*
+*.orig-*
+*.live-*

@@ -86,6 +86,18 @@ static int g_fs_games = 100;      /* 游戏列表再乘一档 % */
    100→300 若一律 10 一格要按二十下，翻倍后是十来下，手感才正常。 */
 #define FS_PCT_FAST_FROM 160
 
+
+/* 「退出自动存档」写进 appendconfig 的那个 state_slot。
+   出厂 9 —— 刻意跟玩家手动存档常用的 0~5 位错开：自动存档每次退出都覆盖，
+   撞上玩家手存的位就等于把人家的进度盖掉了。
+   0..10 由设置页「自动存档位」调。
+   ⚠ 真正读这个值的是**启动器**（vagaretro-shell.py 的 autosave_lines()），
+     前端只负责把 autosave_slot 写进 vgfront.conf。 */
+#define AUTOSLOT_MIN 0
+#define AUTOSLOT_MAX 10
+#define AUTOSLOT_DEF 9
+static int g_autoslot = AUTOSLOT_DEF;
+
 /* ---- 调色板：从编译期宏改成**运行期数组** ------------------------------
    加了主题系统（设置页可切、内存卡可自定义）之后，颜色必须是运行期变量。
    但下面几百处使用点全部写成 C_BG / C_TEXT 这样的宏名 —— 所以做法是
@@ -204,10 +216,11 @@ static char g_theme_id[48] = "langos";
 #define TB_PAD_L   44
 #define TB_PAD_B   30
 #define LOGO_FS    66      /* 上屏 ≈35px（原 26） */
-#define SB_H       78
-#define SB_MAXW    560
-#define SB_RAD     18
-#define SB_FS      32      /* ≈17px（原 13） */
+#define SB_H       78      /* 顶栏内容高度还是按它算（提示本身已移除，见 draw_topbar） */
+/* SB_MAXW / SB_RAD / SB_HINT_A 都随顶栏那段"搜索游戏…"提示一起删掉了
+   （2026-09-16 用户："算了直接去掉 电量旁边的搜索游戏吧 反正是装饰去掉吧"）。
+   现在顶栏不再画任何搜索相关的东西，搜索入口只剩底栏那项「Y 搜索」，功能没少。 */
+#define SB_FS      32      /* ≈17px（原 13）—— ⚠ 电量/音量数字也用它，别动 */
 #define STATUS_FS  32
 #define STATUS_GAP 24
 #define TIME_FS    58      /* ≈31px（原 23） */
@@ -250,8 +263,12 @@ static int g_game_cols = GAME_COLS_DEF;  /* 游戏列表列数    3..6 */
    封面图不管哪种都是**等比裁切铺满**（draw_cover_fit 的 cover 语义），
    不拉伸变形 —— 样式一变卡片高变、封面自己跟着适配。 */
 static int g_cover_sty = 0;
-/* 游戏遮罩：0 = 关闭，1..3 = BEZEL_VAL 的分辨率。见 BEZEL_VAL 那段注释 ——
-   前端只记选择，真正挂遮罩的是启动器（vagaretro-shell.py）。 */
+/* 游戏遮罩：0 = 关闭，1..4 = BEZEL_VAL 的分辨率。见 BEZEL_VAL 那段注释 ——
+   前端只记选择，真正挂遮罩的是启动器（vagaretro-shell.py）。
+   ★ 2026-09-18：初始值仍是 0，但 sconf_load() 在 conf **没有** `bezel=`
+     这一行时会调 bezel_auto_detect() 按本机屏幕自动定档（浪总要求：
+     "什么固件什么dtb你就默认对应的遮罩"）—— 所以"0"只是"还没算"，
+     不等于"用户选了关闭"。 */
 static int g_bezel     = 0;
 /* 游戏来源：0=自动（卡二优先，没插就读卡一）1=只读卡一 2=只读卡二。
    真干活的是宿主 vagaretro-shell.py —— 它读 vgfront.conf 的 romsrc=
@@ -480,6 +497,15 @@ static int g_sub_h  = 0;
  * ==========================================================================*/
 typedef struct {
     const char *title;   /* 显示名（文件名） */
+
+    /* 标题的**拼音首字母**（索引 v5 起有：「魂斗罗1」-> "hdl1"；旧索引为 NULL）。
+       只服务「搜索游戏」—— 玩家输 HDL 得能搜到魂斗罗，而占位文案一直写着
+       「输入首字母或关键词」（2026-09-17 浪总实测：字面匹配 0 条）。
+       为什么表在宿主侧：那张 6763 字的声母表固化成 Python 字符串最省事，
+       C 侧只管拿来比对。也正因为是"宿主给什么就比什么"，这里不假设它是
+       小写 —— ci_contains() 自己会折叠大小写。 */
+    const char *py;
+
     const char *rel;     /* 相对路径，真实路径 = rom_root/pid/rel */
 
     /* gamelist.xml 的 <image> 绝对路径（索引 v3 起有；没有就是 NULL）。
@@ -624,7 +650,7 @@ static Platform *plat_push(Index *ix)
 }
 
 static void game_push(Platform *p, const char *title, const char *rel,
-                     const char *img)
+                     const char *img, const char *py)
 {
     if (p->ngames >= p->gcap) {
         p->gcap = p->gcap ? p->gcap * 2 : 64;
@@ -633,6 +659,7 @@ static void game_push(Platform *p, const char *title, const char *rel,
     }
     Game *g = &p->games[p->ngames];
     g->title = title;
+    g->py    = py;
     g->rel   = rel;
     g->img   = img;
     g->cov   = NULL;          /* realloc 出来的新槽是脏内存，必须显式清零 */
@@ -697,12 +724,15 @@ static int idx_load(const char *path, Index *ix)
                 if (n >= 3 && cur && cur->pid && strcmp(cur->pid, fields[1]) == 0)
                     cur->cores = fields[2][0] ? fields[2] : NULL;
                 break;
-            case 'G':                       /* G 显示名 相对路径 封面绝对路径 */
+            case 'G':                       /* G 显示名 相对路径 封面绝对路径 [拼音首字母] */
                 /* 第 4 列是 v3 才追加的封面绝对路径（gamelist 的 <image>）。
-                   旧索引只有 3 列 → 空指针，前端自动退回按文件名猜。 */
+                   旧索引只有 3 列 → 空指针，前端自动退回按文件名猜。
+                   第 5 列是 v5 才追加的拼音首字母，同理：旧索引没有就 NULL，
+                   搜索退化成纯字面匹配（就是 v5 之前的行为），不会崩。 */
                 if (n >= 3 && cur)
                     game_push(cur, fields[1], fields[2],
-                              (n >= 4 && fields[3][0]) ? fields[3] : NULL);
+                              (n >= 4 && fields[3][0]) ? fields[3] : NULL,
+                              (n >= 5 && fields[4][0]) ? fields[4] : NULL);
                 break;
             }
         }
@@ -1057,6 +1087,7 @@ static const struct { const char *zh, *en; } TR[] = {
     { "游戏来源", "Game Source" },
     { "游戏遮罩", "Bezel" },
     { "屏幕亮度", "Brightness" },
+    { "息屏时间", "Screen timeout" },
     { "系统音量", "System Volume" },
     { "无线开关", "Wi-Fi" },
     { "SSH 服务", "SSH service" },
@@ -1150,6 +1181,8 @@ static const struct { const char *zh, *en; } TR[] = {
     { "读 /sys/class/power_supply 的 battery 节点（容量 + 充放电状态）", "Reads the battery node under /sys/class/power_supply (capacity and charge state)" },
     { "TF1 / TF2 的剩余空间，卡掉了或没挂上一眼能看出来", "Free space on TF1 and TF2 — spot an unmounted card at a glance" },
     { "直接写 backlight 的 brightness（按 max_brightness 换算成百分比）", "Writes the backlight brightness node, scaled to a percentage using max_brightness" },
+    { "闲置多久自动息屏待机（背光灭 + 进待机，省电）。调试时嫌它老黑屏就选「关闭」。改完立即生效",
+      "Idle minutes before the screen blanks and the device suspends. Pick 关闭 to keep debugging; applies immediately" },
     { "系统语言：中文 / English。改完自动重启前端", "UI language: 中文 / English. The UI restarts automatically" },
 
     /* 覆盖率自检补上的 3 条（build/check-i18n.py 报的缺口）——
@@ -1201,6 +1234,22 @@ static const struct { const char *zh, *en; } TR[] = {
       "The look of RetroArch's in-game menu. XMB is the horizontal icon layout (most color themes — the item below picks them); the factory default is RGUI" },
     { "RetroArch 的配色主题（共 9 套）。只在「RA 菜单风格」选 XMB 时生效，其它风格用 RA 内置的那几档",
       "RetroArch color theme (9 included). Applies only when RA Menu Style is XMB; other styles use RetroArch's own palettes" },
+
+    /* RA 帧数显示（2026-09-17 用户要求）：标题 + 说明。
+       选项标签「关闭」TR[] 里已有（跟遮罩/虚拟内存/息屏共用），这里补「开启」。
+       ⚠ TR[] 是**精确匹配** —— 这一行的中文必须跟 IT_ROOT 里 .hint 一个字都不差，
+         否则英文界面下这句会露中文（我第一版源码写"所有 RA 核心"、这里写"所有走 RA 核心"，
+         就不匹配了）。 */
+    { "RA 帧数显示", "RA FPS Display" },
+    { "游戏里画面左上角显示实时帧率（RA 的 OSD 文字），所有 RA 核心的平台一起生效。下次进游戏生效",
+      "Shows real-time FPS in the top-left corner in-game (RetroArch OSD). Applies to all RA-core platforms. Takes effect next launch" },
+    { "开启", "On" },
+
+    /* 自动存档位（2026-09-17 用户要求）：菜单名 + 说明。
+       值显示走 LF("状态槽 %d", ...) —— TR[] 是精确匹配，查不到格式串。 */
+    { "自动存档位", "Auto-Save Slot" },
+    { "「退出自动存档」把进度存到第几个状态槽，出厂 9（跟玩家手动的 0~5 位错开，免得盖掉手动存档）。下次进游戏生效",
+      "Which state slot Exit Auto-Save writes to. Factory default is 9 — kept away from slots 0-5 that players use manually, so automatic saving cannot overwrite a manual save. Applies from the next launch" },
 };
 #define TR_N ((int)(sizeof(TR) / sizeof(TR[0])))
 
@@ -1395,23 +1444,26 @@ static int g_quit = 0;
 /* ==========================================================================
  *  游戏操作弹层（用户 2026-09-15）
  *
- *  按 A 打开，八项：启动游戏 / 收藏游戏 / 更换模拟器核心 / 着色器效果 /
- *                加载存档 / 保存存档 / 退出自动存档 / 删除游戏。
+ *  按 A 打开，六项：启动游戏 / 收藏游戏 / 更换模拟器核心 / 着色器效果 /
+ *                退出自动存档 / 删除游戏。
  *  删除是**真删卡上的源文件**（unlink），所以有两道确认 + 一条模式保险，
  *  细节见 act_key() 里那段注释。
- *  「更换模拟器核心」「着色器效果」「加载存档」会在这个面板里
- *  **原地切成二级列表**，见 draw_core_list() / draw_shader_list() / draw_slot_list()。
+ *  「更换模拟器核心」「着色器效果」会在这个面板里**原地切成二级列表**，
+ *  见 draw_core_list() / draw_shader_list()。
  *
- *  ⚠ 2026-09-16 去掉「保存存档」（用户：「保存只能在 RA 完成」）。前端是启动器，
- *    游戏一跑起来它就退出了，**存不了档**；能做的只有"启动时把位号指过去"。
- *    所以存档位只剩「加载」一个方向，`slots.txt` 里也只记一个位号。
+ *  ⚠ 2026-09-17 整个「加载存档」功能删除（用户：「弹层删除加载存档功能」）。
+ *    它只能做"启动时把 RA 的 state_slot 指到第 N 位"，却要求玩家自己先理解
+ *    RA 的位号（而且 RA 默认那一位 0 在旧列表里被叫成「关闭」，玩家手存的
+ *    档根本选不到）。续档改由「退出自动存档」承担：平台级开关 + 一个全局的
+ *    「自动存档位」（设置页可调 0..10，出厂 9），存和读用同一个位号，
+ *    进游戏直接续上，玩家不用管位号。
  * ==========================================================================*/
 #define ACT_START  0
 #define ACT_FAV    1
 #define ACT_CORE   2
 #define ACT_SHADER 3    /* 着色器效果（用户 2026-09-16） */
-#define ACT_LOAD   4    /* 加载存档：启动时自动读第 N 位（用户 2026-09-16） */
-#define ACT_AUTOSV 5    /* 退出自动存档（按平台生效，用户 2026-09-16） */
+#define ACT_AUTOSV 4    /* 退出自动存档（按平台生效，用户 2026-09-16） */
+#define ACT_CHEAT  5    /* 金手指（用户 2026-09-18） */
 #define ACT_DEL    6    /* 危险项永远排最后一个：加新项只能往它前面加 */
 #define ACT_N      7
 
@@ -1419,7 +1471,7 @@ static int g_quit = 0;
    原来塞在 draw_act_popup() 里面，那个函数够不着。 */
 static const char *const ACT_LABEL[ACT_N] = {
     "启动游戏", "收藏游戏", "更换模拟器核心", "着色器效果",
-    "加载存档", "退出自动存档", "删除游戏"
+    "退出自动存档", "金手指", "删除游戏"
 };
 static const char *const ACT_FOOT[3] = {
     "↑↓ 选择 · A 确认 · B 返回",
@@ -1431,6 +1483,15 @@ static const char *const SCOPE_LABEL     = "适用范围";
 static const char *const SCOPE_VALUE[2]  = { "仅本游戏", "整个平台" };
 /* 二级列表第 1 行：删掉覆盖、回到宿主那套（FORCE_CORE / es_systems.cfg） */
 static const char *const AUTO_LABEL      = "自动（跟随平台默认）";
+
+/* 金手指二级页（用户 2026-09-18）的按键提示。**不能照抄 ACT_FOOT[2]** ——
+   那条写的是"←→ 适用范围"，而这一页第 1 行是开关，←→ 是"换值"不是换范围，
+   照抄会出现一条对着空气说的提示（2026-09-16 着色器那页就踩过同一个坑）。 */
+static const char *const CHEAT_FOOT = "↑↓ 选择 · ←→ 切换 · A 确认 · B 返回";
+/* 二级列表第 1 行（总开关）的标签。**不能直接用 ACT_LABEL[ACT_CHEAT]** ——
+   弹层里那项叫"金手指"没问题，但下面一溜具体功能条目的语境里，单独一行
+   "金手指"会被当成分类标题（2026-09-18 截图核对发现的）。 */
+static const char *const CHEAT_SW_LABEL  = "金手指总开关";
 
 static int g_act_on  = 0;      /* 弹层开着 */
 static int g_act_pi  = -1;     /* 针对 IX.p 里的第几个平台 */
@@ -1523,42 +1584,12 @@ static int  g_act_ssel   = 0;  /* 光标（SHADER_LABEL 下标） */
 static int  g_act_stop   = 0;  /* 滚动首行 */
 static char g_act_scur[80];    /* 当前核心已绑的预设（空 = 关闭） */
 
-/* ---- 「加载存档 / 保存存档」的二级列表（用户 2026-09-16）-----------------
-   用户原话："弹层加个 加载存档 保存存档 二级界面设置五个存档位置"。
-
-   ★★ 先说清这个功能的**物理边界**，不然界面上一定会骗人：
-      本前端是**启动器** —— 它把命令交给宿主、自己就退出了，游戏跑的
-      那段时间它根本不在场。所以这一项**做不到**"在游戏运行中替玩家读/存档"，
-      唯一能做的是：**启动这个游戏时**把存档位的设定一起交给 RetroArch。
-        加载存档 = 启动时 savestate_auto_load（进游戏直接读该位）
-      ⚠ 2026-09-16 去掉「保存存档」，用户原话：「保存只能在 RA 完成」。
-        存档位只剩"加载"一个方向；要"退出时自动存"请用「退出自动存档」那一项
-        （那是平台级的 savestate_auto_save，由 RA 自己在退出时执行）。
-
-   存盘格式（/opt/vagaretro/slots.txt，一行一条，TAB 分隔）：
-       <平台id>\t<游戏相对路径>\t<位号>
-   例：SFC	Hack游戏/Act_Raiser2沉默之圣战.zip	3
-   位号 0 = 关闭，1..5 = 五个存档位置。位号是 0 的那一行会被删掉，
-   不留"配过但没生效"的残行。
-   ⚠ 旧版是四列（`PID\trel\t加载位\t保存位`）。slot_read() 允许 3 或 4 列、
-     只认第 3 列，**老文件不用迁移**，键位照样读得出来。
-
-   ⚠ 键的两个字段（pid / rel）必须和前端 G 行、和 --launch 第 2 个参数
-     逐字符相等 —— 差一个字就是"选了不生效"，所以 rel 一律用索引里那个
-     "/" 分隔的相对路径，别自己拼。 */
-#define SLOTS_PATH   "/opt/vagaretro/slots.txt"
-#define SLOT_N       6          /* 行数：关闭 + 位置 1..5 */
-#define SLOT_MAXLINES 160       /* 最多记多少个游戏的存档位 */
-#define SLOT_LINE    288        /* 单行上限（中文相对路径最长 ~120 字节） */
-static const char *const SLOT_LABEL[SLOT_N] = {
-    "关闭（不用存档位）", "位置 1", "位置 2", "位置 3", "位置 4", "位置 5"
-};
-/* 二级列表的底部提示。**不能照抄 ACT_FOOT[2]** —— 那条写着"←→ 适用范围"，
-   而存档位没有"适用范围"这一行，照抄会出现对着空气说的提示。 */
-static const char *const SLOT_FOOT = "↑↓ 选择 · A 确认 · B 返回";
-static int  g_act_slot = 0;    /* 0 = 没展开；1 = 加载存档列表展开中 */
-static int  g_act_lsel = 0;    /* 光标（SLOT_LABEL 下标，也就是位号） */
-static int  g_act_lcur = 0;    /* 当前生效的位号（0 = 关闭），只用来标"当前" */
+/* ★ 2026-09-17：原来这里是「加载存档」二级列表的整套定义
+   （SLOTS_PATH / SLOT_N / SLOT_MAXLINES / SLOT_LINE / SLOT_LABEL / SLOT_FOOT
+     + g_act_slot / g_act_lsel / g_act_lcur 三个全局状态），
+   已按用户要求整体删除（原话：「弹层删除加载存档功能」）。
+   要接回来请参考 git 历史，或者照 draw_shader_list() 抄一份 ——
+   那是同一个模式的现役实例。 */
 
 /* 收藏列表：一行一条 `<平台id>\t<相对路径>`。
    为什么不塞进 vgfront.conf：那是"设置项"的键值表，收藏是**列表**，
@@ -1577,9 +1608,10 @@ static void draw_act_popup(void);
    所以这里必须前置声明（C 不认后面才定义的函数）。 */
 static void draw_core_list(void);
 static void draw_shader_list(void);
-static void draw_slot_list(void);
+static void draw_cheat_list(void);
+static int  act_cheat_key(Platform *p, SDL_Keycode k);
+static void act_cheat_scroll(void);   /* act_cheat_refresh / --actsub 都要用它 */
 static int  act_shader_key(Platform *p, SDL_Keycode k);
-static int  act_slot_key(Platform *p, SDL_Keycode k);
 static const char *act_cur_core(Platform *p);
 static int  act_key(SDL_Keycode k);
 static void favorites_load(void);
@@ -1836,6 +1868,7 @@ static int topbar_h(void)
 /* 这两个的定义在文件后半段（那儿才是 sysfs / alsa 那一堆工具函数），先声明。 */
 static int battery_pct(char *st, size_t stcap);
 static int alsa_volume(void);
+static int alsa_volume_refresh(void);   /* 状态栏用：强制重读，见 alsa_volume() 附近注释 */
 static int sread_line(const char *path, char *out, size_t cap);   /* 充电判据要用 */
 
 #define STATUS_POLL_MS 1500
@@ -1908,7 +1941,9 @@ static void status_poll(void)
     }
     g_st_chg = chg;
 
-    g_st_vol = alsa_volume();
+    /* ★ 必须走 refresh 版：实体音量键改的是 ALSA mixer（ogage → volume.sh），
+       完全不经过前端；用缓存版的话状态栏永远停在开机那次的数字。 */
+    g_st_vol = alsa_volume_refresh();
     g_st_wif = wifi_link_quality();
 }
 
@@ -1930,33 +1965,24 @@ static void draw_topbar(int y0)
     if (!t_logo) t_logo = bake(REN, F_LOGO, "LANGOS", C_ACCENT, &lw, &lh);
     blit(REN, t_logo, padL, mid - lh / 2, lw, lh);
 
-    /* --- 搜索框 --- */
-    int logo_w = lw;
-    int sbw = S(SB_MAXW);
-    /* 右侧要给"电量 + WiFi + 音量 + 时间"留够位置。
-       2026-09-16 图标放大、数字上线后，原来的 S(260) 已经贴到搜索框上了。 */
-    const int TB_RESERVE = S(430);
-    int avail = g_win_w - 2 * padL - logo_w - TB_RESERVE;
-    if (sbw > avail) sbw = avail;
-    if (sbw < S(200)) sbw = S(200);
-    int sbx = padL + logo_w + (g_win_w - 2 * padL - logo_w - TB_RESERVE - sbw) / 2;
-    SDL_Rect r = { sbx, mid - S(SB_H) / 2, sbw, S(SB_H) };
-    glass_card(r, S(SB_RAD), C_PANEL, 180, C_LINE);
-
-    /* 放大镜：一个方框 + 一根手柄就够辨识了，
-       不为一个圆环烧 64 次 draw call。 */
-    int ic = S(24);
-    int ix = sbx + S(24);
-    setc(REN, C_DIM, 255);
-    SDL_Rect lens = { ix, mid - ic / 2, ic - S(6), ic - S(6) };
-    SDL_RenderDrawRect(REN, &lens);
-    SDL_RenderDrawLine(REN, lens.x + lens.w - S(1), lens.y + lens.h - S(1),
-                            lens.x + lens.w + S(4), lens.y + lens.h + S(4));
-
-    static SDL_Texture *t_ph;
-    static int pw = 0, ph = 0;
-    if (!t_ph) t_ph = bake(REN, F_SB, "搜索游戏…", C_DIM, &pw, &ph);
-    blit(REN, t_ph, ix + ic + S(14), mid - ph / 2, pw, ph);
+    /* --- 搜索提示：整块已移除（2026-09-16） ---
+       顶栏这里先后画过三版"搜索游戏…"提示：
+         ① 白底 + 可见描边的圆角卡片（alpha 180 / rad 18 / 边 C_LINE）；
+         ② 用户："主页的搜索框可不可以沉浸一点" → 收成轻量胶囊
+            （全圆角 / alpha 96 / 同色描边）；
+         ③ 用户："电池旁边的搜索也融进背景比较好" + "装饰做小点"
+            + "主要是框太长了" → 去掉面，只留一颗居中放的小放大镜 + 四个字
+            （F_TIMESUB ≈13px、alpha 165）。
+       最后用户拍板："算了直接去掉 电量旁边的搜索游戏吧 反正是装饰去掉吧"。
+       —— 于是这一段整块删除：不画底、不画放大镜、不画占位文字。
+       这个决定本来就站得住：它**从来不是输入框**，没有任何点击/焦点行为，
+       按 Y 才是真搜索页（底栏那项「Y 搜索」）。既然是纯装饰，
+       就别占顶栏那点注意力 —— 功能上的可发现性一点没丢。
+       ⚠ 连带删掉的东西（都只为算这颗提示的居中位置而存在）：
+         · 局部：logo_w、TB_RESERVE、zone_l/zone_r、t_ph/pw/ph、ic/gpad/gw/ix
+         · 宏：  SB_MAXW / SB_RAD / SB_HINT_A（见文件顶部 TB_PAD_T 那一段）
+         保留 SB_H（顶栏内容高度还是按它算）和 SB_FS（电量/音量数字在用）。
+       顶栏现在就是：LOGO 靠左，电量 / 音量 / 时间靠右，中间留白。 */
 
     /* --- 右侧状态：电量 / 音量 / 时间 --- */
     static SDL_Texture *t_time, *t_sub;
@@ -4125,7 +4151,9 @@ static int ci_contains(const char *hay, const char *needle)
 }
 
 /* 重算结果集。每按一键全量扫一遍索引 —— 六千条游戏名做子串比较是
-   亚毫秒级，比维护"增量收窄上一次结果"少一半代码，也少一半出错的地方。 */
+   亚毫秒级，比维护"增量收窄上一次结果"少一半代码，也少一半出错的地方。
+   中文标题再比一遍拼音首字母（g->py）：输 "hdl" 命中「魂斗罗」——
+   占位文案一直承诺「输入首字母或关键词」，v5 之前只是句空话。 */
 static void search_run(void)
 {
     g_res_n = 0;
@@ -4137,19 +4165,28 @@ static void search_run(void)
         return;
     }
 
+    int n_py = 0;                        /* 有多少条是靠拼音命中的（排错用） */
     for (int i = 0; i < IX.np && g_res_n < SR_NMAX; i++) {
         Platform *p = &IX.p[i];
         for (int g = 0; g < p->ngames && g_res_n < SR_NMAX; g++) {
-            if (ci_contains(p->games[g].title, g_q)) {
-                g_res[g_res_n].plat = i;
-                g_res[g_res_n].gi = g;
-                g_res_n++;
+            const Game *gm = &p->games[g];
+            int by_py = 0;
+            if (ci_contains(gm->title, g_q)) {
+                ;                        /* 字面命中，不需要拼音 */
+            } else if (gm->py && ci_contains(gm->py, g_q)) {
+                by_py = 1;
+            } else {
+                continue;
             }
+            g_res[g_res_n].plat = i;
+            g_res[g_res_n].gi = g;
+            g_res_n++;
+            if (by_py) n_py++;
         }
     }
 
-    printf("[搜索] 「%s」→ %d 条%s\n", g_q, g_res_n,
-           g_res_n >= SR_NMAX ? "（到上限）" : "");
+    printf("[搜索] 「%s」→ %d 条%s（其中拼音命中 %d）\n", g_q, g_res_n,
+           g_res_n >= SR_NMAX ? "（到上限）" : "", n_py);
     fflush(stdout);
 }
 
@@ -4379,6 +4416,10 @@ enum {
     SV_LED_BRIGHT,                           /* 摇杆灯亮度（数值型，百分比） */
     SV_RAMENU,                               /* RA 菜单风格（选项型） */
     SV_RATHEME,                              /* RA 配色主题（选项型，XMB 9 套） */
+    SV_RAFPS,                                /* RA 帧数显示（选项型：关闭/开启） */
+
+    SV_SLEEP,                                /* 息屏时间（选项型：关 / 5 / 10 / 15 / 30 / 60 分钟） */
+    SV_AUTOSLOT,                             /* 自动存档位（数值型 0..10，给「退出自动存档」用） */
     /* 只读信息。掌机上这几个是**高频要看的**（还剩多少电、卡是不是满了、
        IP 是多少好传 ROM），所以宁可多占几行也要给出来。 */
     SV_I_BATT, SV_I_NET, SV_I_DISK, SV_I_TIME,
@@ -4461,10 +4502,123 @@ static const char *const COVER_STY[] = { "竖版", "正方形" };
    ⚠ 所以改这一项**不用重启前端** —— 前端只是把选择记下来，
    下次进游戏才生效。这跟字体/主题那两项不一样，别照着抄。
 
-   ⚠ 选的分辨率要和屏幕一致（这台是 1024x768）。另外两套是给同系列
-   小屏机型的，选错了画面会明显偏小、对不上屏幕。 */
-#define BEZEL_N 4
-static const char *const BEZEL_VAL[]   = { "", "1024x768", "640x480", "720x720" };
+   ⚠ **选的分辨率必须和屏幕一致 —— 这台 MINILOONG 是 960x720。**
+   2026-09-18 修正：以前这里写的是"这台是 1024x768"，是错的，
+   害得默认选了原厂那套 1024x768 包 —— 那套的窗口表是按 1024x768 画布
+   硬搬的（famicom 给的是 941x700 @ 41,34，**941 已经超过本机 720 的屏宽**），
+   挂上去 RA 的画面矩形整个落到屏外 ⇒ **进游戏全黑，只剩一行 FPS 水印**。
+   现在 960x720 这套是拿 1024x768 那套等比缩放（两者同为 4:3，×0.9375）
+   再用**新图自己的 alpha 通道**重新量的窗口，全部落在屏内。 */
+#define BEZEL_N 5
+static const char *const BEZEL_VAL[]   = { "", "960x720", "1024x768", "640x480", "720x720" };
+
+/* 遮罩包根目录（bezel_auto_detect 的"只有一个档就用它"兜底要扫它）。 */
+#define BEZELS_ROOT "/opt/vagaretro/bezels"
+
+/* 读文件第一行（去掉行尾 CR/LF）。成功且非空返回 1。 */
+static int read_first_line(const char *path, char *buf, size_t cap)
+{
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    buf[0] = '\0';
+    if (fgets(buf, (int)cap, fp)) {
+        size_t n = strlen(buf);
+        while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = '\0';
+    }
+    fclose(fp);
+    return buf[0] ? 1 : 0;
+}
+
+/* 从字符串里抠出第一处 "宽x高"，容忍前后缀 —— "720x960" 和
+   "U:720x960p-0"（fb0 的 modes 就是这格式）都要能吃。 */
+static int parse_wxh(const char *s, int *w, int *h)
+{
+    if (!s) return 0;
+    for (const char *p = s; *p; p++) {
+        if (*p < '0' || *p > '9') continue;
+        int a = atoi(p);
+        const char *q = p;
+        while (*q >= '0' && *q <= '9') q++;
+        if ((*q == 'x' || *q == 'X') && q[1] >= '0' && q[1] <= '9') {
+            int b = atoi(q + 1);
+            if (a > 0 && b > 0) { *w = a; *h = b; return 1; }
+        }
+        p = q - 1;                        /* for 还会 ++，等价于从 q 继续 */
+    }
+    return 0;
+}
+
+/* ★★★ 2026-09-18 浪总：「什么固件什么dtb你就默认对应的遮罩呗 比如迷你龙
+ *      你设置里面就默认 960*720 的遮罩」
+ *
+ *   为什么必须自动：g_bezel 的初始值是 0（= 关闭），而 sconf_load() 只在
+ *   vgfront.conf **有** `bezel=` 这一行时才覆盖它 ⇒ 新装机 / 恢复出厂 /
+ *   conf 被删过的机器，遮罩是**关着**的，玩家压根不知道有这功能。
+ *   比"关着"更糟的是"选错档"：原厂那套 1024x768 的窗口表是按 1024 画布画的
+ *   （famicom 给的是 941x700 @ 41,34，941 超过本机 720 的屏宽），挂上去画
+ *   面矩形整个落到屏外 —— 实测**进游戏全黑、只剩一行 FPS 水印**。
+ *   所以默认得"跟着设备走"，不能指望玩家在一堆档里猜对。
+ *
+ *   探测顺序：
+ *     ① DSI 面板的首选模式（掌机主屏；本机 = 720x960）
+ *     ② framebuffer 的 modes（"U:720x960p-0"）
+ *        ⚠ 别用 /sys/class/graphics/fb0/virtual_size —— 那是**双缓冲**，
+ *          本机报的是 720,1920，拿它去匹配一个档都对不上
+ *     ③ 屏幕没探到、或尺寸不在档位表里 ⇒ bezels/ 下**只有一个档**就用它
+ *        （换了机型但只装了一套包时不至于空手）
+ *     ④ 都不行 ⇒ 返回 0（关闭），跟改动前一样
+ *
+ *   ⚠ **方向不敏感**：面板是物理竖装（modes 报 720x960）、逻辑横屏
+ *     （画布 960x720），同一块屏 —— 下面按「集合相等」比，不认谁宽谁高。
+ *   ⚠ 只在 conf **没有** `bezel=` 这一行时调用（见 sconf_load）。
+ *     玩家手工选过就以文件为准，哪怕他显式选的是「关闭」（值 = 空串）。
+ */
+static int bezel_auto_detect(void)
+{
+    int sw = 0, sh = 0;
+    char buf[160];
+
+    static const char *const MODES[] = {
+        "/sys/class/drm/card0-DSI-1/modes",     /* 本机主屏 */
+        "/sys/class/drm/card0-DSI-2/modes",
+        "/sys/class/graphics/fb0/modes",        /* 兜底 */
+        NULL
+    };
+    for (int i = 0; MODES[i] && !sw; i++)
+        if (read_first_line(MODES[i], buf, sizeof(buf)))
+            parse_wxh(buf, &sw, &sh);
+
+    if (sw > 0 && sh > 0) {
+        for (int i = 1; i < BEZEL_N; i++) {
+            int bw = 0, bh = 0;
+            if (parse_wxh(BEZEL_VAL[i], &bw, &bh) &&
+                ((bw == sw && bh == sh) || (bw == sh && bh == sw)))
+                return i;
+        }
+    }
+
+    DIR *dp = opendir(BEZELS_ROOT);
+    if (dp) {
+        char only[64] = "";
+        int cnt = 0;
+        struct dirent *de;
+        while ((de = readdir(dp)) != NULL) {
+            if (de->d_name[0] == '.') continue;
+            for (int i = 1; i < BEZEL_N; i++)
+                if (strcmp(de->d_name, BEZEL_VAL[i]) == 0) {
+                    if (cnt == 0) snprintf(only, sizeof(only), "%s", de->d_name);
+                    cnt++;
+                    break;
+                }
+        }
+        closedir(dp);
+        if (cnt == 1)
+            for (int i = 1; i < BEZEL_N; i++)
+                if (strcmp(only, BEZEL_VAL[i]) == 0) return i;
+    }
+    return 0;
+}
+
 
 /* 游戏来源（用户 2026-09-15 要求）。存盘写 ROMSRC_VAL[]（auto/1/2），
    宿主读同一个键决定扫哪张卡。 */
@@ -4567,7 +4721,7 @@ static int g_rafwd = 0;                         /* RAFWD_LABEL 的下标 */
    一字不差，只是把变量展开写死 —— 换卡后必须重扫，否则列表还是旧的。 */
 #define ROM_INDEX_CMD \
     "/usr/bin/python3 /opt/vagaretro/vagaretro-shell.py /opt/vagaretro/config.ini --gen-index"
-static const char *const BEZEL_LABEL[] = { "关闭", "1024×768", "640×480", "720×720" };
+static const char *const BEZEL_LABEL[] = { "关闭", "960×720", "1024×768", "640×480", "720×720" };
 
 /* ---- 摇杆灯（AW20036）--------------------------------------------------
    用户 2026-09-15："迷你龙这个LANGOS设置里面要加个摇杆灯调节"。
@@ -4642,6 +4796,23 @@ static const char *const RAXMB_VAL[] = {
     "automatic", "daite", "dot-art", "flatui", "flatux", "monochrome", "pixel", "retrosystem", "systematic"
 };
 
+/* RetroArch 帧数显示（fps_show）。2026-09-17 用户："设置里面加一个 ra 全局帧数显示开关"。
+   RA 把实时帧率画在画面**左上角**，开关就是这个布尔键 —— 它是**全局**的：
+   所有走 RA 核心的平台（FC/SFC/GBA/PS1/街机…）一起生效，不用逐核心配。
+   独立模拟器（NDS/SS/PSP/PICO8）不归它管，那些各有各的显示方式。
+
+   ⚠ **前置条件：`video_font_enable = "true"`**（RA 的 OSD 文字总开关）——
+     它关着的话 fps_show 开了也一个字都不画，属于"设了没反应"的静默失效。
+     实测两份 cfg 里都是 true，所以这一项只动 fps_show 就够。
+   ⚠ 跟 RA 语言/主题一样：**只写盘、不重启前端**（OSD 跟前端界面无关），
+     下次进游戏生效。`config_save_on_exit = "false"` ⇒ RA 退出不回写 cfg，
+     所以这里写下去的值就是最终态，不会被 RA 自己覆盖。
+   ⚠ `fps_update_interval`（两份都是 60）= 每 60 帧刷新一次读数，
+     60fps 下正好一秒一跳，是 RA 出厂值，不用动。 */
+#define RAFPS_N 2
+static const char *const RAFPS_LABEL[] = { "关闭", "开启" };
+static const char *const RAFPS_VAL[]   = { "false", "true" };
+
 /* 虚拟内存的可选项。放在这儿（而不是 swap_apply 旁边）是因为
    性能菜单的条目表在后面一点的 IT_PERF 里就要引用 SWAP_LABEL / SWAP_N。
    上限 1024MB 的理由见 swap_apply 上面的注释。 */
@@ -4685,6 +4856,15 @@ static const SItem IT_ROOT[] = {
     { .name = "GAME SOURCE",          .cn = "游戏来源", .type = ST_VAL, .src = SV_ROMSRC,
       .choices = ROMSRC_LABEL, .nch = ROMSRC_N,
       .hint = "自动 = 插了卡二就读卡二，没插就读卡一；锁定卡一/卡二则只读那一张。改完自动重扫游戏列表并重启前端" },
+
+    /* 用户 2026-09-17：「退出自动保存存档功能  自动保存默认在状态槽9
+       设置里面可以修改状态槽0-10状态槽」。
+       紧挨着「游戏来源」—— 两项都是"启动游戏时怎么干活"的设置。
+       ⚠ 这一项只写 vgfront.conf；真正读它的是**启动器**，所以改完
+         **不用重启前端**，下次进游戏生效。 */
+    { .name = "AUTO-SAVE SLOT",       .cn = "自动存档位", .type = ST_VAL, .src = SV_AUTOSLOT,
+      .vmin = AUTOSLOT_MIN, .vmax = AUTOSLOT_MAX, .step = 1,
+      .hint = "「退出自动存档」把进度存到第几个状态槽，出厂 9（跟玩家手动的 0~5 位错开，免得盖掉手动存档）。下次进游戏生效" },
     /* 用户 2026-09-15："设备里面 ra 语言切换"。
        跟遮罩那项一样属于"只写盘"：RA 的菜单语言影响不到前端界面本身，
        所以**不重启前端**，改完下次进 RA 就生效。 */
@@ -4713,6 +4893,12 @@ static const SItem IT_ROOT[] = {
     { .name = "RA THEME",             .cn = "RA 主题配色", .type = ST_VAL, .src = SV_RATHEME,
       .choices = RAXMB_LABEL, .nch = RAXMB_N,
       .hint = "RetroArch 的配色主题（共 9 套）。只在「RA 菜单风格」选 XMB 时生效，其它风格用 RA 内置的那几档" },
+    /* 2026-09-17 用户："设置里面加一个 ra 全局帧数显示开关"。
+       放在 RA 那三项后面 —— 都是"游戏里 RA 长什么样"的设置。
+       同样是只写盘、不重启前端，下次进游戏生效。 */
+    { .name = "RA FPS DISPLAY",       .cn = "RA 帧数显示", .type = ST_VAL, .src = SV_RAFPS,
+      .choices = RAFPS_LABEL, .nch = RAFPS_N,
+      .hint = "游戏里画面左上角显示实时帧率（RA 的 OSD 文字），所有 RA 核心的平台一起生效。下次进游戏生效" },
     { .name = "GAME CHEATS",          .cn = "金手指", .type = ST_MENU, .menu = M_CHEATS,
       .hint = "一键安装中文金手指合集（RA + PPSSPP 两边的目录都放到位）" },
     { .name = "SYSTEM INFO",          .cn = "系统信息", .type = ST_MENU, .menu = M_INFO,
@@ -4735,10 +4921,33 @@ static const SItem IT_SOUND[] = {
       .hint = "写 RK817 codec 的主音量，并 alsactl store 落盘" },
 };
 
+/* ---- 息屏时间（= 官方 autosuspend 的空闲阈值）-----------------------------
+   用户 2026-09-17："设置加个息屏时间调整吧 不然调试容易黑屏"。
+   真源只有一个：/home/ark/.config/.TIMEOUT —— 官方 /usr/local/bin/auto_suspend.py
+   读它当空闲分钟数（闲置到点 **且** 没充电 **且** 没在跑游戏 → systemctl suspend，
+   走 systemd-sleep 钩子把背光写 0，就是"黑屏"那一步）；内容是 "Off" 时，
+   /usr/local/bin/auto_suspend_update.sh 会把 autosuspend 停掉并 disable。
+   所以这一项**不用自带守护进程**，只写一个文件 + 跑官方开关脚本：
+     · SLEEP_LABEL[] 只是界面文案，SLEEP_VAL[] 才是写进 .TIMEOUT 的值
+     · 两张表下标一一对应，**别往中间插档**（插了老配置会显示错档）
+   出厂是 10 分钟（官方 Restore 脚本写的就是它）。改完立即生效，不重启前端。 */
+#define SLEEP_TIMEOUT_PATH "/home/ark/.config/.TIMEOUT"
+#define SLEEP_UPDATE_SH    "/usr/local/bin/auto_suspend_update.sh"
+static const char *const SLEEP_LABEL[] = { "关闭", "5 分钟", "10 分钟", "15 分钟", "30 分钟", "60 分钟" };
+static const char *const SLEEP_VAL[]   = { "Off",  "5",      "10",      "15",      "30",      "60" };
+#define SLEEP_N ((int)(sizeof(SLEEP_LABEL) / sizeof(SLEEP_LABEL[0])))
+
 static const SItem IT_DISP[] = {
     { .name = "BACKLIGHT",        .cn = "屏幕亮度", .type = ST_VAL, .src = SV_BRIGHT,
       .vmin = 5, .vmax = 100, .step = 5,
       .hint = "直接写 backlight 的 brightness（按 max_brightness 换算成百分比）" },
+
+    /* 用户 2026-09-17："设置加个息屏时间调整吧 不然调试容易黑屏"。
+       走系统自带的自动待机（autosuspend.service + .TIMEOUT），不新增守护进程；
+       选「关闭」= stop + disable 那个服务。放在「屏幕亮度」旁边 —— 都是屏幕行为。 */
+    { .name = "SCREEN TIMEOUT",   .cn = "息屏时间", .type = ST_VAL, .src = SV_SLEEP,
+      .choices = SLEEP_LABEL, .nch = SLEEP_N,
+      .hint = "闲置多久自动息屏待机（背光灭 + 进待机，省电）。调试时嫌它老黑屏就选「关闭」。改完立即生效" },
     { .name = "HOME COLUMNS",     .cn = "主页列数", .type = ST_VAL, .src = SV_HCOLS,
       .choices = COLS_HOME, .nch = 3,
       .hint = "主页平台网格一排几个。列少了卡片大、列多了信息密" },
@@ -4750,12 +4959,17 @@ static const SItem IT_DISP[] = {
     { .name = "COVER STYLE",      .cn = "游戏封面样式", .type = ST_VAL, .src = SV_COVERSTY,
       .choices = COVER_STY, .nch = 2,
       .hint = "竖版 = 高是宽的 1.33 倍（传统卡盒比例）；正方形 = 1:1，一屏多一行。封面自动裁切适配" },
-    /* 游戏遮罩 —— 2026-09-14 用户要求。三套遮罩内置在系统里，这里选一套。
-       ⚠ 要挑和屏幕分辨率一致的那档（这台是 1024x768；另外两套是给同系列
-       小屏机型的）。改完**不用重启前端**，下次进游戏生效。 */
+    /* 游戏遮罩 —— 2026-09-14 用户要求。遮罩包内置在系统里，这里选一套。
+       ★★ 2026-09-18（浪总："什么固件什么dtb你就默认对应的遮罩呗"）：
+         默认值不再是"关闭"，改成**按本机屏幕自动定档** —— 本机 MINILOONG
+         会自动落到 960×720（见 bezel_auto_detect）。玩家手工选过就以他的为准。
+       ⚠ 这里列的是**所有可能的档**，不代表都装了包。选到没装的那档不会崩：
+         启动器发现 `bezels/<档>/` 里没这个平台就跳过遮罩（日志写"没有对应
+         目录"），画面仍按核心比例显示。
+       ⚠ 改完**不用重启前端** —— 前端只记选择，下次进游戏才生效。 */
     { .name = "GAME BEZEL",       .cn = "游戏遮罩", .type = ST_VAL, .src = SV_BEZEL,
       .choices = BEZEL_LABEL, .nch = BEZEL_N,
-      .hint = "给游戏画面套一层主机边框，画面按核心原生比例显示不错位。选和屏幕分辨率一致的那档，下次进游戏生效" },
+      .hint = "给游戏画面套一层主机边框，画面按核心原生比例显示不错位。默认按本机屏幕自动选，下次进游戏生效" },
     /* 字号两项 —— 2026-09-14 用户要求。设备是 4 寸屏，设计基准却是
        1920x1080，所有字号上屏都被缩到 53%，不少人反馈看不清。
        默认 100% 就是设计值；改完**立即重启前端**（字是烘进纹理的，
@@ -5308,7 +5522,9 @@ static int write_script(const char *path, const char *body)
 
 /* 音量读一次之后就缓存。为什么必须缓存：sv_text() 在每次重画时都要取值，
    而 amixer 是 fork+exec（~10ms 起），每帧跑一次等于给界面塞了个卡顿源。
-   写音量时顺手把缓存改掉，于是"调完立刻看到新值"也不需要重读。 */
+   写音量时顺手把缓存改掉，于是"调完立刻看到新值"也不需要重读。
+   ★ 但这个缓存**没有外部失效路径** ⇒ 实体音量键（ogage → volume.sh → amixer）
+     改了 mixer 之后前端看不见。所以状态栏那一路必须走 alsa_volume_refresh()。 */
 static int g_vol_cache = -2;      /* -2 = 还没读过 */
 
 /* 从 amixer sget 的输出里抠出百分比。
@@ -5341,10 +5557,10 @@ static int mix_pct(const char *buf)
    NULL = 还没探测过。 */
 static const char *g_volctl = NULL;
 
-static int alsa_volume(void)
+/* ★★ 真去 fork 一次 amixer 读音量。**别直接调它** —— sv_text() 每次重画都要取值，
+   按帧 fork 会卡；常规路径走下面带缓存的 alsa_volume()。 */
+static int alsa_volume_raw(void)
 {
-    if (g_vol_cache != -2) return g_vol_cache;
-
     char buf[1024];
     char cmd[128];
 
@@ -5369,6 +5585,26 @@ static int alsa_volume(void)
 
     g_vol_cache = -1;               /* 一个都没有 —— 界面显示"不可用"，不假装是 0 */
     return -1;
+}
+
+/* 设置页 / 每帧调用的缓存版：命中就直接返回，不 fork。 */
+static int alsa_volume(void)
+{
+    if (g_vol_cache != -2) return g_vol_cache;
+    return alsa_volume_raw();
+}
+
+/* ★★★ 状态栏专用：强制重读。
+   为什么必须存在这一个：实体音量键走的是
+       ogage → /usr/local/bin/volume.sh → `amixer sset Master`
+   **完全不经过前端**；而 g_vol_cache 一旦读到值就永远返回它，没有任何外部失效路径
+   ⇒ 按实体键调音量时，状态栏会一直停在开机那一次读到的数字
+   （2026-09-18 浪总反馈："按实体按键调节音量，状态栏的音量不会动"）。
+   status_poll() 本来就 1.5 秒跑一次，这里顺手把缓存打掉重读，成本可接受。 */
+static int alsa_volume_refresh(void)
+{
+    g_vol_cache = -2;
+    return alsa_volume();
 }
 
 static int bl_cur_pct(void)
@@ -5817,7 +6053,16 @@ static int sv_toggle_state(int src)
         if (srun_capture("nmcli radio wifi 2>/dev/null", b, sizeof(b)) != 0) return -1;
         return strncmp(b, "enabled", 7) == 0;
     case SV_SSH:
-        if (srun_capture("systemctl is-active ssh 2>/dev/null", b, sizeof(b)) != 0) return -1;
+        /* ★★ 2026-09-17 用户报「ssh 关闭后又打不开了」—— **根因就在这行**。
+           `systemctl is-active` 用**退出码**表达状态（active=0 / inactive=3 /
+           failed=3），而 srun_capture 返回的正是 pclose() 的 status。
+           把它当"命令失败"的判据，服务一关就返回 -1 ⇒ 界面显示「不可用」、
+           按 A 也切不动 ⇒ SSH 成了「**能关不能开**」的死锁；而 SSH 一关，
+           远程通道也断了，玩家只能拆机插卡去捞。
+           **判状态只看输出文本，退出码一律不管**（文本读不到才算失败：
+           那会得到空串，strncmp 自然不为 0，照样判成"关"—— 安全的默认）。
+           ⚠ 无线开关没这毛病：`nmcli radio wifi` 即使 disabled 也返回 0。 */
+        srun_capture("systemctl is-active ssh 2>/dev/null", b, sizeof(b));
         return strncmp(b, "active", 6) == 0;
     default: return 0;
     }
@@ -6291,6 +6536,53 @@ static int ra_theme_write(int idx)
     return ok;
 }
 
+/* RA 帧数显示（fps_show）。跟主题两项同一套路：实读 cfg、写两份、不重启前端。
+   ⚠ 读的是**主 cfg**：两份虽然分开写，但前端只认 64 位那份当"当前值"，
+     跟 ra_menu_read / ra_theme_read 保持一致（retroarch32 那份只是捎带写）。 */
+static int ra_fps_read(void)
+{
+    char v[16];
+    /* 读不到就报"关" —— RA 自己的出厂值就是 false，别撒谎说成开着。 */
+    if (!ra_cfg_get(RA_CFG_MAIN, "fps_show", v, sizeof(v))) return 0;
+    return (strcasecmp(v, "true") == 0) ? 1 : 0;
+}
+
+static int ra_fps_write(int idx)
+{
+    if (idx < 0 || idx >= RAFPS_N) return 0;
+    int ok = ra_cfg_set("fps_show", RAFPS_VAL[idx]);
+    printf("[RA帧数] fps_show=%s rc=%d\n", RAFPS_VAL[idx], ok);
+    fflush(stdout);
+    return ok;
+}
+
+/* .TIMEOUT 的当前值 → SLEEP_LABEL 的下标。
+   ⚠ 文件不存在时返回「30 分钟」那一档 —— auto_suspend.py 读不到就用它的
+     DEFAULT_TIMEOUT_MINUTES=30，界面必须跟它说同一件事，不能显示 10 糊弄人。
+   ⚠ 认不出的值（玩家自己写了 45 这种）取"不超过它的最大档"，比落到「关闭」
+     更接近实况；真值是 0 或者负数才退到默认档。 */
+static int sleep_cur_index(void)
+{
+    char b[32];
+    if (!sread_line(SLEEP_TIMEOUT_PATH, b, sizeof(b))) {
+        for (int i = 0; i < SLEEP_N; i++)
+            if (strcmp(SLEEP_VAL[i], "30") == 0) return i;
+        return 0;
+    }
+    for (int i = 0; i < SLEEP_N; i++)
+        if (strcasecmp(b, SLEEP_VAL[i]) == 0) return i;
+    int n = atoi(b);
+    if (n > 0) {
+        int best = 1;                        /* 从"5 分钟"起步，别落到「关闭」 */
+        for (int i = 1; i < SLEEP_N; i++)
+            if (atoi(SLEEP_VAL[i]) <= n) best = i;
+        return best;
+    }
+    for (int i = 0; i < SLEEP_N; i++)
+        if (strcmp(SLEEP_VAL[i], "30") == 0) return i;
+    return 0;
+}
+
 static int sv_cur_index(const SItem *it)
 {
     char b[64];
@@ -6316,6 +6608,7 @@ static int sv_cur_index(const SItem *it)
     /* RA 主题两项也是实读 cfg —— 玩家可能自己进 RA 的界面里改过。 */
     case SV_RAMENU:  return ra_menu_read();
     case SV_RATHEME: return ra_theme_read();
+    case SV_RAFPS:   return ra_fps_read();
     case SV_UILANG:
         return (g_uilang >= 0 && g_uilang < UILANG_N) ? g_uilang : UI_ZH;
     case SV_SWAP:     return swap_cur_index();  /* 直接问 /proc/swaps 的实况 */
@@ -6323,6 +6616,9 @@ static int sv_cur_index(const SItem *it)
        这里返回"值"本身只是为了让 sf_text/调试看在同一个地方能查到。 */
     case SV_FSUI:   return g_fs_ui;
     case SV_FSGAME: return g_fs_games;
+
+    case SV_AUTOSLOT: return g_autoslot;        /* 数值型，值就在内存里 */
+    case SV_SLEEP:  return sleep_cur_index();   /* 实读 /home/ark/.config/.TIMEOUT */
     case SV_TZ: {
         /* 当前时区不在表里（出厂 Asia/Shanghai 在表内；用户手工设过别的
            就会落空）→ 返回 -1，左右翻时从表头接上。 */
@@ -6596,6 +6892,9 @@ static void sv_text(int src, char *out, size_t cap)
         if (v < 0) snprintf(out, cap, "不可用");
         else       snprintf(out, cap, "%d%%", v);
         return; }
+    case SV_SLEEP:
+        snprintf(out, cap, "%s", SLEEP_LABEL[sleep_cur_index()]);
+        return;
     case SV_CPUGOV:
         snprintf(out, cap, "%s", sread_line(CPU_GOV_PATH, b, sizeof(b)) ? b : "不可用");
         return;
@@ -6674,6 +6973,10 @@ static void sv_text(int src, char *out, size_t cap)
         else
             snprintf(out, cap, "%s", RAXMB_LABEL[ra_theme_read()]);
         return; }
+    /* RA 帧数显示：也**实读 cfg** —— 玩家可能自己进 RA 的「设置 → 屏幕显示」改过。 */
+    case SV_RAFPS:
+        snprintf(out, cap, "%s", RAFPS_LABEL[ra_fps_read()]);
+        return;
     /* 界面语言：值就是内存里的 g_uilang，不用去盘上问 ——
        sconf_load() 启动时读过一次，之后只有本进程会改它。
        注意标签走 UILANG_LABEL 而不是 tr()："中文"故意不在表里。 */
@@ -6697,6 +7000,11 @@ static void sv_text(int src, char *out, size_t cap)
                        : v <= 160 ? "大" : v <= 220 ? "特大" : "超大";
         snprintf(out, cap, "%d%%（%s）", v, lv);
         return; }
+
+    /* 自动存档位：光给个数字太干，"这是给谁用的"写进值里。 */
+    case SV_AUTOSLOT:
+        snprintf(out, cap, LF("状态槽 %d", "State slot %d"), g_autoslot);
+        return;
     case SV_TZ: {
         char z[96];
         if (!tz_current(z, sizeof(z))) snprintf(out, cap, "不可用");
@@ -6881,6 +7189,24 @@ static void sv_apply(int src, int v, char *fb, size_t cap)
         if (ok) snprintf(fb, cap, "亮度设为 %d%%", pct);
         else    snprintf(fb, cap, "亮度设置失败（backlight 节点写不动？）");
         return; }
+    case SV_SLEEP: {
+        if (v < 0 || v >= SLEEP_N) { snprintf(fb, cap, "选项越界"); return; }
+        const char *val = SLEEP_VAL[v];
+        /* 官方那一路：写 .TIMEOUT（带换行 —— 官方 Restore 脚本也是 echo 写的）
+           → 跑 auto_suspend_update.sh（内容是 Off 就 stop+disable，否则 restart+enable）。 */
+        snprintf(cmd, sizeof(cmd),
+                 "printf '%%s\\n' %s > %s && %s >/dev/null 2>&1",
+                 val, SLEEP_TIMEOUT_PATH, SLEEP_UPDATE_SH);
+        int ok = srun(cmd);
+        /* 回读复核：真源就是那个文件，别信"命令没报错" */
+        char b[32] = "";
+        int back = sread_line(SLEEP_TIMEOUT_PATH, b, sizeof(b));
+        if (ok && back && strcasecmp(b, val) == 0)
+            snprintf(fb, cap, "息屏时间：%s%s", SLEEP_LABEL[v],
+                     v == 0 ? "（自动待机已停用）" : "");
+        else
+            snprintf(fb, cap, "息屏时间设置失败（%s 写不动？）", SLEEP_TIMEOUT_PATH);
+        return; }
 
     case SV_CPUGOV:
     case SV_GPUGOV:
@@ -7058,6 +7384,18 @@ static void sv_apply(int src, int v, char *fb, size_t cap)
             snprintf(fb, cap, "RA 主题设为 %s（下次进游戏生效）", RAXMB_LABEL[ra_theme_read()]);
         return; }
 
+    /* RA 帧数显示：只写 fps_show 一个键（ra_cfg_set 内部自己循环把两份 cfg 都改）。
+       ⚠ 这里**不**去校验 video_font_enable —— 那是 RA 的 OSD 文字总开关，
+         出厂两份都是 true；真被谁关掉了，回执里替玩家下结论反而误导。 */
+    case SV_RAFPS: {
+        if (v < 0 || v >= RAFPS_N) { snprintf(fb, cap, "选项越界"); return; }
+        if (!ra_fps_write(v)) { snprintf(fb, cap, "改不动 retroarch.cfg（写入失败）"); return; }
+        if (ra_fps_read() == 1)
+            snprintf(fb, cap, "RA 帧数显示已开启，画面左上角（下次进游戏生效）");
+        else
+            snprintf(fb, cap, "RA 帧数显示已关闭（下次进游戏生效）");
+        return; }
+
     case SV_SWAP: {
         if (v < 0 || v >= SWAP_N) { snprintf(fb, cap, "选项越界"); return; }
         if (!swap_apply(atoi(SWAP_MB[v]), fb, cap)) return;
@@ -7080,6 +7418,18 @@ static void sv_apply(int src, int v, char *fb, size_t cap)
                src == SV_FSUI ? "ui" : "games", pct);
         fflush(stdout);
         settings_restart(M_DISP);
+        return; }
+
+    /* 自动存档位：只写 vgfront.conf，**不重启前端**（读它的是启动器，
+       下次进游戏才用到）。越界值夹到 0..10，别让手工写坏的 conf 传下去。 */
+    case SV_AUTOSLOT: {
+        int s = v < AUTOSLOT_MIN ? AUTOSLOT_MIN
+              : v > AUTOSLOT_MAX ? AUTOSLOT_MAX : v;
+        g_autoslot = s;
+        sconf_save();
+        snprintf(fb, cap, "自动存档位设为状态槽 %d（下次进游戏生效）", s);
+        printf("[存档位] autosave_slot -> %d\n", s);
+        fflush(stdout);
         return; }
 
     case SV_TZ: {
@@ -7148,8 +7498,11 @@ static void sconf_save(void)
     fprintf(fh, "#   theme      主题 id。内置：langos / neon / amber / paper /\n");
     fprintf(fh, "#              aurora / dusk / retro；\n");
     fprintf(fh, "#              自定义：内存卡 /roms/themes/*.theme 里的 id\n");
-    fprintf(fh, "#   bezel      游戏遮罩分辨率，留空=关闭。可选 1024x768 /\n");
-    fprintf(fh, "#              640x480 / 720x720。**启动器**（vagaretro-shell.py）\n");
+    fprintf(fh, "#   bezel      游戏遮罩分辨率，留空=关闭。可选 960x720（本机原生，\n");
+    fprintf(fh, "#              推荐）/ 1024x768 / 640x480 / 720x720。\n");
+    fprintf(fh, "#              ⚠ 必须选和屏幕一致的那档：本机是 960x720，选 1024x768\n");
+    fprintf(fh, "#              会让画面矩形落到屏外（进游戏全黑）。\n");
+    fprintf(fh, "#              **启动器**（vagaretro-shell.py）\n");
     fprintf(fh, "#              读这一行，在启动游戏时用 --appendconfig 挂给 RetroArch\n");
     fprintf(fh, "#   romsrc     游戏来源 auto / 1 / 2。**启动器**（vagaretro-shell.py）\n");
     fprintf(fh, "#              读这一行决定扫哪张卡：auto = 卡二优先（没插读卡一）、\n");
@@ -7157,13 +7510,16 @@ static void sconf_save(void)
     fprintf(fh, "#   ui_lang    前端界面语言             0=中文 1=English\n");
     fprintf(fh, "#   （RA 界面语言**故意不存这里** —— 真源是 retroarch.cfg 的\n");
     fprintf(fh, "#     user_language，RA 自己退出时也会回写那一份，两边都记必对不上）\n");
+
+    fprintf(fh, "#   autosave_slot 「退出自动存档」用的状态槽   0..10（出厂 9）\n");
     fprintf(fh, "home_cols=%d\ngame_cols=%d\ncover_style=%d\nfs_ui=%d\nfs_games=%d\n"
-                "bezel=%s\nromsrc=%s\ntheme=%s\nui_lang=%d\n",
+                "bezel=%s\nromsrc=%s\ntheme=%s\nui_lang=%d\nautosave_slot=%d\n",
             g_pg_cols, g_game_cols, g_cover_sty, g_fs_ui, g_fs_games,
             BEZEL_VAL[(g_bezel >= 0 && g_bezel < BEZEL_N) ? g_bezel : 0],
             ROMSRC_VAL[(g_romsrc >= 0 && g_romsrc < ROMSRC_N) ? g_romsrc : 0],
             g_theme_id,
-            (g_uilang >= 0 && g_uilang < UILANG_N) ? g_uilang : UI_ZH);
+            (g_uilang >= 0 && g_uilang < UILANG_N) ? g_uilang : UI_ZH,
+            g_autoslot);
     fclose(fh);
 }
 
@@ -7192,12 +7548,20 @@ static void sconf_load(void)
         int v = atoi(b);
         if (v >= FS_PCT_MIN && v <= FS_GAME_MAX) g_fs_games = v;
     }
-    /* 遮罩存的是字符串（"1024x768"），要拿 BEZEL_VAL 反查下标。
-       认不出来的一律当关闭 —— 手工写错别名不该让前端行为不可预期。 */
+    /* 遮罩存的是字符串（"960x720"），要拿 BEZEL_VAL 反查下标。
+       认不出来的一律当关闭 —— 手工写错别名不该让前端行为不可预期。
+       ★★ 2026-09-18（浪总："什么固件什么dtb你就默认对应的遮罩"）：
+         **没有这一行**时不再默认"关闭"，而是按本机屏幕自动定档 ——
+         见 bezel_auto_detect() 的长注释。两种情况必须分清楚：
+           · conf 里没 `bezel=` 这一行  ⇒ conf_get_str 返回 0 ⇒ 自动探测
+           · conf 里是 `bezel=`（空串）  ⇒ 返回 1 且 b = ""  ⇒ 玩家显式
+             选了「关闭」，尊重他的选择，不要又给自动开回来 */
     if (conf_get_str(SCONF_PATH, "bezel", b, sizeof(b))) {
         g_bezel = 0;
         for (int i = 1; i < BEZEL_N; i++)
             if (strcmp(b, BEZEL_VAL[i]) == 0) { g_bezel = i; break; }
+    } else {
+        g_bezel = bezel_auto_detect();
     }
     /* 游戏来源同理：认不出的值回到"自动"。 */
     if (conf_get_str(SCONF_PATH, "romsrc", b, sizeof(b))) {
@@ -7211,6 +7575,14 @@ static void sconf_load(void)
     if (conf_get_str(SCONF_PATH, "ui_lang", b, sizeof(b))) {
         int v = atoi(b);
         if (v == UI_ZH || v == UI_EN) g_uilang = v;
+    }
+
+
+    /* 自动存档位：认不出的值（手工把 conf 写坏）回到出厂 9 ——
+       宁可回到一个"不会盖掉玩家手动存档"的位号，也不跟着乱写。 */
+    if (conf_get_str(SCONF_PATH, "autosave_slot", b, sizeof(b))) {
+        int v = atoi(b);
+        if (v >= AUTOSLOT_MIN && v <= AUTOSLOT_MAX) g_autoslot = v;
     }
     /* RA 语言：**不读 vgfront.conf**，直接从 retroarch.cfg 认一下，
        让设置页一进来就显示真实档位。 */
@@ -7432,6 +7804,27 @@ static void setting_step(const SItem *it, int dir)
     char fb[160];
     if (it->type == ST_BUTTON) return;
 
+    /* ★ 开关型（无线开关 / SSH 服务）：**翻一下就切**。
+       2026-09-17 用户报「WiFi 无法关闭」，根因就在这儿 ——
+       这两项既没有 choices，又不在下面那串 `cur` 判断里（SV_VOLUME /
+       SV_BRIGHT / SV_LED_BRIGHT / SV_FSUI / SV_FSGAME / SV_AUTOSLOT），
+       于是 cur 恒为 -1，直接吐「读不到当前值，无法调节」就 return 了，
+       **连 nmcli 都没调** —— NetworkManager 的 journal 里收不到任何 off
+       请求（只有别人发的 wireless-enabled:on），所以怎么按都关不掉。
+       这里按 ST_TOGGLE 定义处那句注释实现：「A 或左右翻转」。 */
+    if (it->type == ST_TOGGLE) {
+        int st = sv_toggle_state(it->src);
+        if (st < 0) {
+            set_flash("读不到当前值，无法调节");
+            mark_dirty();
+            return;
+        }
+        sv_apply(it->src, !st, fb, sizeof(fb));
+        set_flash(fb);
+        mark_dirty();
+        return;
+    }
+
     if (it->choices) {
         int cur = sv_cur_index(it);
         int i;
@@ -7463,6 +7856,8 @@ static void setting_step(const SItem *it, int dir)
         /* 字号：当前值就在内存里，直接读，不用去问系统 */
         else if (it->src == SV_FSUI)   cur = g_fs_ui;
         else if (it->src == SV_FSGAME) cur = g_fs_games;
+
+        else if (it->src == SV_AUTOSLOT) cur = g_autoslot;
         if (cur < 0) { snprintf(fb, sizeof(fb), "读不到当前值，无法调节"); }
         else {
             int step = it->step ? it->step : 1;
@@ -8247,12 +8642,85 @@ static const HelpRow HELP_ROWS[] = {
     { "音量", "Volume",   "用机身音量键，RA 里没绑手柄音量",
                           "Use the side volume keys — RA has none bound" },
 
+    /* ---- 独立模拟器（2026-09-17 用户："把我们独立模拟器的快捷键也写进设置说明书"）
+       全段真源（都是从设备上扒的，不是照记忆写）：
+         · "M + START 退出" = /usr/local/bin/killer_daemon.py 的 JOY_MAPPINGS
+           `"retrogame_joypad": { "f1": 316, "f3": 315 }` —— f1(316=M) 必须**按住**，
+           f3(315=START) 一按就 `pkill <VAR>*`；VAR 由各包装脚本写进
+           /home/ark/.config/KILLIT。挂了这个的共 15+ 个：drastic / yaba(SS) /
+           PPSSPPSDL(PSP) / flycast(DC·NAOMI·AW) / gzdoom·lzdoom / scummvm /
+           solarus / ecwolf / hypseus(Daphne·Singe) / bigpemu / piemu / ti99sim /
+           GameTankEmulator。所以它是**全设备统一**的退出键。
+         · NDS 那四条 = /opt/advdrastic/advanced_drastic/config/drastic.cfg：
+             HOT(GATE)         = 1032 → SDL 8  = SELECT
+             MENU              = 1034 → SDL 10 = M
+             HOT_SAVE_STATE    = 1029 → SDL 5  = R1
+             HOT_LOAD_STATE    = 1028 → SDL 4  = L1
+             HOT_TOGGLE_FAST_FORWARD = 1030 → SDL 6 = L2
+           ⚠ SS / PSP 的"呼出模拟器菜单"键**没找到可靠真源**（PPSSPP 的
+             ppsspp.ini 里压根没有 [ControlMapping] 段；yabasanshiro 只有
+             ESC/Pause 字串），所以不写 —— 假说明书比没有更坏。
+       ⚠ 左列宽上限那条"≈11 半角宽"是**按等宽数出来的，会骗人**：这套字体是
+         比例字体，"SELECT+R1"（9 个字符）比 "M + L2 / R2"（11 个，但一半是空格）
+         还宽，实测直接顶到右列、中间一个像素的空隙都没有（2026-09-17 截图可见）。
+         ⇒ **大写字母堆在一起的键名，按 9 个字符就要掂量**；长了就拆成
+         "门禁行 + '+ R1' 续行"（跟上面 RetroArch 那段一个写法），别硬塞。 */
+    { NULL, NULL, "独立模拟器（NDS / SS / PSP）", "Standalone emulators" },
+    { "M + START", "M + START", "退出模拟器，回到前端（各家通用）",
+                          "Exit emulator, back to frontend" },
+    { "M", "M",           "NDS：呼出 DraStic 菜单（金手指 / 存档 / 画面）",
+                          "NDS: open DraStic menu (cheats / states / display)" },
+    { "SELECT", "SELECT", "NDS：热键门禁 —— 下面三条都要先按住它",
+                          "NDS: hotkey gate — hold it for the rows below" },
+    { "+ R1", "+ R1",     "NDS：保存即时存档",     "NDS: save state" },
+    { "+ L1", "+ L1",     "NDS：读取即时存档",     "NDS: load state" },
+    { "+ L2", "+ L2",     "NDS：快进（按住不放）", "NDS: fast-forward (hold)" },
+
+    /* ---- J2ME（Java 游戏，2026-09-18 用户："Java的按键说明也加到设置快捷键说明书里面吧"）
+       真源有**两处，必须一起看**：
+         · /opt/j2me-3566/keymap.cfg —— ★★ 它【覆盖】源码里的 KEY_* 常量，
+           下面"哪颗键"一律以它为准：左键=X 右键=B OK=A  *=SELECT  #=START
+                                     0=Y  1=L1   3=R1   7=L2     9=R2
+         · native/j2me-sdl/miniloong.cpp 的 startCapturing()（门禁 M_MOD=10）
+       实测（2026-09-18 21:1x，uinput 假手柄 + GUID 锁设备，脚本 pc/req858，34 条记录）：
+         304(B)→'w' 右软键 · 305(A)→RETURN 确定 · 307(X)→'q' 左软键 · 308(Y)→'0' 数字 0
+         310(L1)→'1' · 311(R1)→'3' · 312(L2)→'7' · 313(R2)→'9' · 544(↑)→UP
+         M(316) 单击 → 【无任何输出】；M+START → 退出；M+SELECT → 'c' 切按键模式
+         M+Y(308) → 旋转 3 档 ★；M+X(307) → 触屏开关 ★
+       ⚠⚠ 曾经把旋转/触屏**记反**成 "M+B 旋转 / M+Y 触屏" —— 真值是
+          **M+Y = 旋转、M+X = 触屏**。根因还是老坑：KEY_0 被 cfg 指到 Y、
+          KEY_LEFT 指到 X，**别拿 #define 猜**（见文件头那条注意事项）。
+       ⚠ M+B / M+A / M+L1… **不是**组合键 —— M 只是门禁，按住它时这些键照常
+          发自己的键。全表只有 START / Y / X / SELECT 四个跟 M 有组合。
+       ⚠ 改 miniloong.cpp 或 keymap.cfg 的映射，这一段必须同步改。 */
+    { NULL, NULL, "J2ME（Java 游戏）", "J2ME (Java games)" },
+    { "方向键", "D-Pad",          "移动 / 菜单选择",       "Move / menu select" },
+    { "A", "A",                   "确定（OK 键）",         "Confirm (OK)" },
+    { "B", "B",                   "右软键",                "Right soft key" },
+    { "X", "X",                   "左软键",                "Left soft key" },
+    { "Y", "Y",                   "数字键 0",              "Number 0" },
+    { "L1 / R1", "L1 / R1",       "数字键 1 / 3",          "Numbers 1 / 3" },
+    { "L2 / R2", "L2 / R2",       "数字键 7 / 9",          "Numbers 7 / 9" },
+    /* ⚠ 说明列**不要用 markdown 反引号** —— 这个渲染器原样打出来，
+       2026-09-18 实测截图里显示成 "`*` 星号键"，很难看。 */
+    { "SELECT", "SELECT",         "* 星号键",              "* key" },
+    { "START", "START",           "# 井号键",              "# key" },
+    { "M", "M",                   "组合门禁（单击不做任何事）",
+                                  "Combo gate (single press: nothing)" },
+    { "M + START", "M + START",   "退出游戏，回到前端",     "Exit game, back to frontend" },
+    { "M + Y", "M + Y",           "旋转画面（3 档循环）",   "Rotate screen (3 steps)" },
+    { "M + X", "M + X",           "触屏模式开关",           "Toggle touch-screen mode" },
+    /* ⚠ "M + SELECT" 10 个字符放不下 —— 2026-09-18 实测被 ellipsize 成
+       "M + SELE…"。去掉两个空格（8 个字符）正好跟 "M + START" 等宽，
+       别再加空格、也别改成全角。 */
+    { "M+SELECT", "M+SELECT",     "循环切换按键模式",       "Cycle key layout" },
+
     { NULL, NULL, "系统热键（任何界面都生效）", "System hotkeys (any screen)" },
     { "电源键 短按", "Power (short)", "进入待机；按任意键唤醒", "Sleep; press any key to wake" },
     { "电源键 长按", "Power (long)",  "关机（先播关机动画）",   "Power off (plays shutdown animation)" },
     { "音量 + / −", "Volume + / −",  "系统主音量",           "System volume" },
-    { "自动待机", "Auto sleep", "闲置 10 分钟、没充电、没跑游戏时自动进入",
-                          "Auto sleep when idle, not charging, no game" },
+    { "自动待机", "Auto sleep", "闲置到「显示设置 → 息屏时间」设定的时长后自动进入（可调、可关）",
+                          "Auto sleep after the idle time set in 息屏时间 (Display settings)" },
 };
 #define HELP_N ((int)(sizeof(HELP_ROWS) / sizeof(HELP_ROWS[0])))
 
@@ -8552,6 +9020,505 @@ static int autosave_set(const char *pid, int on)
     return 1;
 }
 
+/* ---- /opt/vagaretro/cheats.txt：金手指开关（用户 2026-09-18）-------------
+ * 用户原话："启动弹层能加个金手指选项吗  自动找到咱们系统里面自带的对应的
+ *           ra 金手指文件  金手指功能的开关可以做到二级页面"
+ *
+ * 一行一条，TAB 分隔（和 cores.txt / favorites.txt 同款）：
+ *     <平台id>\t<rom 文件名>\t<0|1>     游戏级
+ *     <平台id>\t*\t<0|1>                平台级（rom 名写 *）
+ * 游戏级优先，没有再看平台级，都没有 = 关。
+ *
+ * ★ 前端**只管写这一个文件**。真正的活儿 —— 把匹配到的 cht 复制进隔离目录、
+ *   把 cheatN_enable 翻成 true、给 RA 挂 --appendconfig（apply_cheats_after_load
+ *   + cheat_database_path）—— 全在宿主 vagaretro-shell.py 里。那边有 os/re，
+ *   做中文名归一化比在 C 里手搓稳妥，而且**两边各写一套匹配规则迟早会漂**，
+ *   所以规则以宿主那份为准。这里的 cheat_scan() 只负责"让玩家看见找到了哪一份、
+ *   有几条金手指"，不参与实际加载。
+ * ★ 金手指库（/home/ark/.config/retroarch/cheats/中文金手指/）是**只读**的。
+ *   RA 退出时会打 `[Cheats] Save game-specific cheatfile:`，也就是**把内存里的
+ *   金手指写回文件**；直接给它软链等于改写源库（2026-09-18 实测踩到：一个
+ *   642 字节的简写 cht 被重写成 4127 字节的全字段格式）。宿主那边是"复制到
+ *   /opt/vagaretro/cheats-auto 再让 RA 读那一份"，源库一字不动。
+ * ------------------------------------------------------------------------- */
+#define CHEATS_PATH   "/opt/vagaretro/cheats.txt"
+#define CHEAT_LIB_DIR "/home/ark/.config/retroarch/cheats/中文金手指"
+
+/* 条目级开关（用户 2026-09-18 晚追加："金手指具体什么功能的开关没显示"）。
+ *   二级列表 = 行 0 适用范围 / 行 1 总开关 / 行 2.. 每条具体功能。
+ * ★ 库里的 cht 规模非常野（实测 2152 个）：62% ≤ 9 条，但 101 个 > 255 条，
+ *   最大的 大航海时代2PS.cht 有 **23107 条**（3.2 MB / 9.2 万行）。
+ *   界面只展示前 CHEAT_MAX 条，超出的由宿主按"默认开"处理（等于老行为）。 */
+#define CHEAT_MAX      192
+#define CHEAT_DESC_CAP 120
+
+static int  g_act_cheat   = 0;    /* 二级列表开着 */
+static int  g_act_chsel   = 0;    /* 光标行：0 适用范围 / 1 总开关 / 2.. 条目 */
+static int  g_act_chtop   = 0;    /* 滚动首行 */
+static int  g_act_chscope = 0;    /* 0 = 仅本游戏，1 = 整个平台 */
+static int  g_act_chon    = 0;    /* 当前这一级的开关值 */
+static int  g_act_chlib   = 0;    /* 库里找到匹配的 cht 了吗 */
+static int  g_act_chcount = 0;    /* 那一份里**真实**有几条（可能 > CHEAT_MAX） */
+static int  g_act_chvis   = 0;    /* 展示条数 = min(chcount, CHEAT_MAX) */
+static char g_act_chfile[128];    /* 匹配到的 cht 文件名（空 = 没找到） */
+static char g_act_chdesc[CHEAT_MAX][CHEAT_DESC_CAP];  /* 条目名（解析时已截断） */
+static char g_act_chbits[CHEAT_MAX + 2];              /* 每位 '0'/'1'，长度 = chvis */
+
+/* 二级列表的总行数：2 个固定行 + 条目 */
+static int cheat_nrow(void) { return 2 + g_act_chvis; }
+
+/* 名字归一化。规则**必须和宿主 vagaretro-shell.py 的 _cht_norm() 一致**：
+ *     "1943.zip" / "1943 (J)_ra.cht" / "1943（日版）_ra.cht"  ->  "1943"
+ * 顺序：去扩展名 -> 去 "_ra" 尾巴 -> 去括号内容 -> 去空白连接符 -> 转小写。
+ * ⚠ 中文按 UTF-8 字节处理，只对 ASCII 转小写 —— 不能用 tolower()，那玩意按
+ *   当前 locale 解释单字节，中文会被啃掉。 */
+static void cheat_norm(const char *in, char *out, size_t cap)
+{
+    if (!out || !cap) return;
+    out[0] = '\0';
+    if (!in || !in[0]) return;
+
+    char tmp[300];
+    snprintf(tmp, sizeof(tmp), "%s", in);
+
+    char *dot = strrchr(tmp, '.');                    /* ① 去扩展名 */
+    if (dot && dot != tmp) *dot = '\0';
+
+    size_t L = strlen(tmp);                           /* ② 去 "_ra" */
+    if (L >= 3 && tmp[L - 3] == '_' &&
+        (tmp[L - 2] == 'r' || tmp[L - 2] == 'R') &&
+        (tmp[L - 1] == 'a' || tmp[L - 1] == 'A'))
+        tmp[L - 3] = '\0';
+
+    size_t tlen = strlen(tmp);
+    size_t j = 0;
+    int depth = 0;                                    /* ③ 去括号（含括号里的内容） */
+    for (size_t i = 0; i < tlen && j + 1 < cap; ) {
+        unsigned char c  = (unsigned char)tmp[i];
+        unsigned char c1 = (i + 1 < tlen) ? (unsigned char)tmp[i + 1] : 0;
+        unsigned char c2 = (i + 2 < tlen) ? (unsigned char)tmp[i + 2] : 0;
+        int adv = 1;
+
+        if (c == '(' || c == '[' || c == '{') {
+            depth++;
+        } else if (c == ')' || c == ']' || c == '}') {
+            if (depth) depth--;
+        } else if (c == 0xEF && c1 == 0xBC && (c2 == 0x88 || c2 == 0x89)) {
+            if (c2 == 0x88) depth++;                  /* 全角 （ U+FF08 */
+            else if (depth) depth--;                  /* 全角 ） U+FF09 */
+            adv = 3;
+        } else if (c == 0xE3 && c1 == 0x80 && (c2 == 0x90 || c2 == 0x91)) {
+            if (c2 == 0x90) depth++;                  /* 【 U+3010 */
+            else if (depth) depth--;                  /* 】 U+3011 */
+            adv = 3;
+        } else if (c == ' ' || c == '\t' || c == '_' || c == '-' || c == '\'') {
+            /* ④ 直接吞掉，不落 out */
+        } else if (c == 0xC2 && c1 == 0xB7) {
+            adv = 2;                                  /* · U+00B7 */
+        } else if (!depth) {
+            out[j++] = (char)((c >= 'A' && c <= 'Z') ? (c + 32) : c);
+        }
+        i += adv;
+    }
+    out[j] = '\0';
+}
+
+/* 「版本修饰词」白名单 —— 反向命中的安全阀。
+ * ROM 名 = cht 名 + 这些词 时，认作同一款游戏、共用同一份金手指。
+ *
+ * ★★ 为什么**必须**白名单，不能裸用"谁长听谁的"（2026-09-18 实测）：
+ *   裸反向匹配会出安全事故 —— cht `忍_ra.cht`(norm="忍") 会把「忍者神龟3汉化版」
+ *   抢走；cht `炸弹人2` 会把「炸弹人2002」抢走。挂错金手指 = 改错内存、直接崩游戏，
+ *   这账我们在 NDS 上吃过。白名单里的词只覆盖"同一款游戏的不同版本/汉化/加强"，
+ *   语义上共用金手指是安全的。
+ *   ⚠ 用前缀比较（不是相等）：实测 extra 常是复合词，
+ *     如「无限命汉化版」「汉化版震动版」。 */
+static int cheat_suffix_ok(const char *extra)
+{
+    static const char *OK[] = {
+        "汉化版", "汉化", "可视化", "无敌版", "无敌", "改版", "强化版", "强化",
+        "超级版", "美版", "日版", "欧版", "限定版", "震动版", "不死版", "不死",
+        "完美版", "完美汉化", "增强版", "重制版", "复刻版", "最终版",
+        "简体版", "繁体版", "中文版", "无限",
+        NULL
+    };
+    if (!extra || !extra[0]) return 0;
+    for (int i = 0; OK[i]; i++)
+        if (strncmp(extra, OK[i], strlen(OK[i])) == 0) return 1;
+    return 0;
+}
+
+/* 归一后的目录名是不是「平台目录」（FC / FC hack / MD hack(picodrive) …）。
+ *
+ * ★★ 子目录回退必须先过这一关，否则会大面积错配（2026-09-18 实测）：
+ *   索引里 FC/SFC/MD 的 rel 是**带平台前缀**的（`FC/1943.zip`），
+ *   dirname 就是 `FC` —— 一旦拿它去反向匹配，cht `FC原人.cht`(norm="fc原人")
+ *   会把整个 FC 平台的 37 款 ROM 全挂到它头上。
+ *   注释里的值都是 chat_norm() 处理后的形态（空格/连字符被吞）。 */
+static int cheat_is_plat_dir(const char *s)
+{
+    static const char *P[] = {
+        "fc", "sfc", "md", "gb", "gbc", "gba", "pce", "ps1", "dc", "n64",
+        "psp", "ss", "nds", "arcade", "neogeo", "naomi", "ws", "wsc", "gg",
+        "ngpc", "dos", "pico8", "j2me", "atari", "hack",
+        "fchack", "sfchack", "mdhack", "fchd", "sfchd", "mdhd", "mdsfc",
+        NULL
+    };
+    if (!s || !s[0]) return 1;               /* 没有目录名 —— 当平台处理 */
+    for (int i = 0; P[i]; i++)
+        if (strcmp(s, P[i]) == 0) return 1;
+    return 0;
+}
+
+/* 在库里找这个游戏的 cht，**只找文件、不解析内容**。
+ * 返回 1 = 找到（文件名写进 out，不含目录）。
+ *
+ * ★ 五级匹配（后四级是 2026-09-18 第二轮加的，专治 PS1/DC「一个都认不出来」）：
+ *   ① exact   归一后完全相等                                    （最可信）
+ *   ② fwd     cht 名比 ROM 名长 —— cht 带副标题/区域后缀，取**最短**那个
+ *   ③ rev     ROM 名比 cht 名长，且多出来的是版本修饰词（汉化版/无敌版/…）
+ *             例：ROM「放浪冒险谭 汉化版.chd」-> cht「放浪冒险谭.cht」
+ *   ④ DIRrev  拿 ROM 的**真子目录名**再走一遍 ③（多碟盘常这么放）
+ *             例：ROM「异度装甲 汉化版/Xenogears (Disc 1).chd」-> cht「异度装甲.cht」
+ *   ⑤ NAMEex  拿游戏库的**显示名**精确匹配。索引里的 title 是整理过的中文译名，
+ *             能把「FC-HD/Kung Fu (U) [!].zip」接到「成龙踢馆_ra.cht」、
+ *             「[SuperGrafx]1941 反击战」接到「1941反击战_ra.cht」（norm 会剥掉
+ *             方括号内容，正好把 [SuperGrafx] 前缀吃掉）           （最靠猜）
+ *   ★ 顺序不能换：越靠后的"猜"成分越大，前面的能命中就不许往后走。
+ *
+ * ★ 为什么和 cheat_scan() 拆开（2026-09-18）：弹层要判断"这个游戏有没有
+ *   金手指"来决定「金手指」这一项显不显示，那个判断每帧都可能跑到；
+ *   而下面那半段解析是**有副作用**的（会重置 g_act_chbits，还会往
+ *   g_act_chdesc 里灌条目名）。判据和"真的要用"必须分开 ——
+ *   否则弹层一画就把玩家存的开关位串冲掉。 */
+static int cheat_find_file(const char *pid, const char *rom_rel,
+                           const char *disp_name, char *out, size_t cap)
+{
+    if (out && cap) out[0] = '\0';
+    if (!pid || !pid[0] || !out || !cap) return 0;
+
+    char dir[420];
+    snprintf(dir, sizeof(dir), "%s/%s中文金手指", CHEAT_LIB_DIR, pid);
+
+    DIR *dp = opendir(dir);
+    if (!dp) return 0;                    /* 这个平台没有中文金手指，安静返回 */
+
+    /* 待查 ROM 名 —— rel 是相对路径（可能带目录），只取文件名那一段 */
+    char want[280];
+    {
+        const char *sl = rom_rel ? strrchr(rom_rel, '/') : NULL;
+        cheat_norm(sl ? sl + 1 : (rom_rel ? rom_rel : ""), want, sizeof(want));
+    }
+    if (!want[0]) { closedir(dp); return 0; }
+
+    /* ⑤ 的键 = 显示名。和 ROM 名归一后同源就没信息量，直接不启用。 */
+    char wname[280];
+    cheat_norm(disp_name ? disp_name : "", wname, sizeof(wname));
+    if (!wname[0] || strcmp(wname, want) == 0) wname[0] = '\0';
+
+    /* ④ 的键 = 真子目录名（dirname 的**最后一段**）。⚠ 平台目录必须排除，见 cheat_is_plat_dir */
+    char wdir[280];
+    wdir[0] = '\0';
+    if (rom_rel) {
+        const char *sl = strrchr(rom_rel, '/');
+        if (sl && sl != rom_rel) {
+            char d[300];
+            size_t dl = (size_t)(sl - rom_rel);
+            if (dl >= sizeof(d)) dl = sizeof(d) - 1;
+            memcpy(d, rom_rel, dl);
+            d[dl] = '\0';
+            const char *dlast = strrchr(d, '/');      /* 多级目录只认最靠里那一级 */
+            char t[280];
+            cheat_norm(dlast ? dlast + 1 : d, t, sizeof(t));
+            if (!cheat_is_plat_dir(t)) snprintf(wdir, sizeof(wdir), "%s", t);
+        }
+    }
+
+    char   best[256];  best[0] = '\0';  size_t bestlen = 0;   /* ② 取最短 */
+    char   rev[256];   rev[0]  = '\0';  size_t revlen  = 0;   /* ③ 取最长前缀 */
+    char   dre[256];   dre[0]  = '\0';  size_t drelen  = 0;   /* ④ 取最长前缀 */
+    char   nmx[256];   nmx[0]  = '\0';  size_t nmxlen  = 0;   /* ⑤ 取最短 */
+    int    exact = 0;                   size_t exactlen = 0;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        size_t nl = strlen(de->d_name);
+        if (nl < 5) continue;                             /* 至少 "x.cht" */
+        if (strcasecmp(de->d_name + nl - 4, ".cht") != 0) continue;
+
+        char got[280];
+        cheat_norm(de->d_name, got, sizeof(got));
+        if (!got[0]) continue;
+        size_t gl = strlen(got), wl = strlen(want);
+
+        /* ★★ 每一级的候选都要**确定性**地选出来，不能"遇上谁算谁"。
+           归一化会吞掉空格/连字符/括号内容，于是库里出现大量同归一的重复：
+             「放浪冒险谭.cht」 vs 「放浪冒险谭 .cht」
+             「战场之狼_ra.cht」 vs 「战场之狼(美版)_ra.cht」
+             「超级机器人大战 α.cht」 vs 「超级机器人大战α.cht」
+           readdir 的顺序就是文件系统顺序（不保证稳定）⇒ 不 tie-break 的话，
+           同一款游戏每次进可能挂上**不同**的金手指。统一按
+           「文件名字节数」「字典序」定序，两端（C / Python 模拟）算法同源。 */
+
+        if (strcmp(got, want) == 0) {                     /* ① exact：取最短 */
+            if (!exact || nl < exactlen ||
+                (nl == exactlen && strcmp(de->d_name, out) < 0)) {
+                snprintf(out, cap, "%s", de->d_name);
+                exactlen = nl;
+                exact = 1;
+            }
+            continue;
+        }
+        if (gl > wl && strncmp(got, want, wl) == 0 &&     /* ② fwd：取最短 */
+            (!best[0] || gl < bestlen ||
+             (gl == bestlen && strcmp(de->d_name, best) < 0))) {
+            bestlen = gl;
+            snprintf(best, sizeof(best), "%s", de->d_name);
+        }
+        if (gl < wl && strncmp(want, got, gl) == 0 &&     /* ③ rev：取最长前缀 */
+            cheat_suffix_ok(want + gl) &&
+            (!rev[0] || gl > revlen ||
+             (gl == revlen && strcmp(de->d_name, rev) < 0))) {
+            revlen = gl;
+            snprintf(rev, sizeof(rev), "%s", de->d_name);
+        }
+        if (wdir[0]) {                                    /* ④ DIRrev */
+            size_t dl = strlen(wdir);
+            if (gl < dl && strncmp(wdir, got, gl) == 0 &&
+                cheat_suffix_ok(wdir + gl) &&
+                (!dre[0] || gl > drelen ||
+                 (gl == drelen && strcmp(de->d_name, dre) < 0))) {
+                drelen = gl;
+                snprintf(dre, sizeof(dre), "%s", de->d_name);
+            }
+        }
+        if (wname[0] && strcmp(got, wname) == 0 &&        /* ⑤ NAMEex：取最短 */
+            (!nmx[0] || nl < nmxlen ||
+             (nl == nmxlen && strcmp(de->d_name, nmx) < 0))) {
+            nmxlen = nl;
+            snprintf(nmx, sizeof(nmx), "%s", de->d_name);
+        }
+    }
+    closedir(dp);
+
+    if (exact)   return out[0] ? 1 : 0;
+    if (best[0]) { snprintf(out, cap, "%s", best); return 1; }
+    if (rev[0])  { snprintf(out, cap, "%s", rev);  return 1; }
+    if (dre[0])  { snprintf(out, cap, "%s", dre);  return 1; }
+    if (nmx[0])  { snprintf(out, cap, "%s", nmx);  return 1; }
+    return 0;
+}
+
+/* 在库里找这个游戏的 cht 并**读进来**：文件名写进 out、条数写进 cnt，
+ * 条目名灌进 g_act_chdesc、g_act_chvis/CHEAT_MAX 与 g_act_chbits 一并复位。 */
+static int cheat_scan(const char *pid, const char *rom_rel,
+                      const char *disp_name, char *out, size_t cap, int *cnt)
+{
+    if (out && cap) out[0] = '\0';
+    if (cnt) *cnt = 0;
+    if (!cheat_find_file(pid, rom_rel, disp_name, out, cap)) return 0;
+
+    char dir[420];
+    snprintf(dir, sizeof(dir), "%s/%s中文金手指", CHEAT_LIB_DIR, pid);
+
+    /* 数条数 + 抓条目名。两件事都得防坑：
+     *  ① **不要信文件头的 `cheats = N`** —— 实测有 decl=8/real=14、decl=39/real=125
+     *     对不上的，一律以实际 `cheatN_desc` 行为准（RA 自己也是按行读的）。
+     *  ② desc 文本里**本身可能带引号**（`"时间0'0"00"`、`""吸收能力"`），
+     *     所以取**第一个引号到最后一个引号**之间，不能按引号 split。
+     * 顺带把条目名逐条拷进 g_act_chdesc（超 CHEAT_MAX 的只计数不存）。
+     * bits 默认**全 '0'（全关）** —— 浪总 2026-09-18 晚特意要求的：
+     *   "金手指打开之后点进去的功能不要默认都是开启的呀 容易出bug"。
+     *   这个坑很实在：库里有 101 个文件 >255 条（最大 23107 条），全 enable
+     *   既可能把 RA 拖死，多条金手指互相打架也可能把游戏搞崩。
+     *   之后 act_cheat_refresh() 读 cheats.txt 时再按记录覆盖。 */
+    char full[600];
+    snprintf(full, sizeof(full), "%s/%s", dir, out);
+    g_act_chvis = 0;
+    for (size_t i = 0; i < sizeof(g_act_chbits) - 1; i++) g_act_chbits[i] = '0';
+
+    FILE *fh = fopen(full, "r");
+    if (fh) {
+        char line[1024];
+        int n = 0;
+        while (fgets(line, sizeof(line), fh)) {
+            const char *s = line;
+            while (*s == ' ' || *s == '\t') s++;
+            if (strncmp(s, "cheat", 5) != 0) continue;
+            const char *u = strchr(s, '_');
+            if (!u || strncmp(u, "_desc", 5) != 0) continue;
+
+            const char *eq = strchr(u + 5, '=');
+            if (eq) {
+                const char *q1 = strchr(eq, '"');
+                const char *q2 = q1 ? strrchr(eq, '"') : NULL;
+                if (q1 && q2 && q2 > q1 + 1 && n < CHEAT_MAX) {
+                    size_t len = (size_t)(q2 - q1 - 1);
+                    if (len > CHEAT_DESC_CAP - 1) len = CHEAT_DESC_CAP - 1;
+                    /* 别把 UTF-8 汉字截成半个（续字节 10xxxxxx 就再退一格） */
+                    while (len && ((unsigned char)q1[1 + len] & 0xC0) == 0x80) len--;
+                    memcpy(g_act_chdesc[n], q1 + 1, len);
+                    g_act_chdesc[n][len] = '\0';
+                }
+            }
+            n++;
+        }
+        fclose(fh);
+        g_act_chcount = n;
+        g_act_chvis   = (n > CHEAT_MAX) ? CHEAT_MAX : n;
+        g_act_chbits[g_act_chvis] = '\0';
+        if (cnt) *cnt = n;
+    }
+    return 1;
+}
+
+/* 这一行是不是"这次要替换掉"的那条。 */
+static int cheat_line_matches(const char *line, const char *pid,
+                              const char *rom, int scope)
+{
+    const char *t1 = strchr(line, '\t');
+    if (!t1 || !pid) return 0;
+
+    size_t pl = strlen(pid);
+    if ((size_t)(t1 - line) != pl || strncmp(line, pid, pl) != 0) return 0;
+
+    const char *t2 = strchr(t1 + 1, '\t');
+    if (!t2) return 0;                                /* 只认三字段行 */
+
+    if (scope == 1) return (t2 - (t1 + 1)) == 1 && t1[1] == '*';
+    if (!rom || !rom[0]) return 0;
+    size_t rl = strlen(rom);
+    return (size_t)(t2 - (t1 + 1)) == rl && strncmp(t1 + 1, rom, rl) == 0;
+}
+
+/* 读某一级的开关。返回 1 = 有记录。
+ *   on   <- 总开关（第 3 列）
+ *   bits <- 条目级位串（第 4 列，可选；没有就让调用方保留"全开"默认值）
+ * ★ 第 4 列是 2026-09-18 晚加的 —— 老记录只有三列，读到就保持全开，
+ *   老 cheats.txt 因此完全向后兼容。 */
+static int cheat_get(const char *pid, const char *rom, int scope,
+                     int *on, char *bits, size_t bcap)
+{
+    if (on) *on = 0;
+    if (bits && bcap) bits[0] = '\0';
+    if (!pid || !pid[0]) return 0;
+
+    FILE *fh = fopen(CHEATS_PATH, "r");
+    if (!fh) return 0;
+
+    char line[768];
+    int hit = 0;
+    while (fgets(line, sizeof(line), fh)) {
+        size_t Lq = strlen(line);
+        while (Lq && (line[Lq - 1] == '\n' || line[Lq - 1] == '\r')) line[--Lq] = '\0';
+        if (!line[0] || line[0] == '#') continue;
+
+        const char *t1 = strchr(line, '\t');
+        if (!t1) continue;
+        const char *t2 = strchr(t1 + 1, '\t');
+        if (!t2) continue;
+
+        size_t pl = strlen(pid);
+        if ((size_t)(t1 - line) != pl || strncmp(line, pid, pl) != 0) continue;
+
+        int ok;
+        if (scope == 1) {
+            ok = ((t2 - (t1 + 1)) == 1 && t1[1] == '*');
+        } else {
+            size_t rl = rom ? strlen(rom) : 0;
+            ok = rl > 0 && (size_t)(t2 - (t1 + 1)) == rl &&
+                 strncmp(t1 + 1, rom, rl) == 0;
+        }
+        if (!ok) continue;
+
+        if (on) *on = (t2[1] == '1');
+        if (bits && bcap) {
+            const char *t3 = strchr(t2 + 1, '\t');
+            if (t3 && t3[1]) {
+                size_t j = 0;
+                for (const char *q = t3 + 1; *q && j + 1 < bcap; q++) {
+                    if (*q != '0' && *q != '1') break;   /* 只认位串，别的当场收手 */
+                    bits[j++] = *q;
+                }
+                bits[j] = '\0';
+            }
+        }
+        hit = 1;
+        break;
+    }
+    fclose(fh);
+    return hit;
+}
+
+/* 把记录里的位串套到当前这份 cht 上。
+ * ★ 只有记录里**明确的 '1' 才算开**，其余（长度不够 / 位串为空）一律保持
+ *   scan 给的默认值 '0'（全关）—— 跟"默认不勾选"这条产品约定一致。 */
+static void cheat_apply_bits(const char *bits)
+{
+    if (!bits || !bits[0]) return;
+    size_t L = strlen(bits);
+    for (int i = 0; i < g_act_chvis; i++)
+        if ((size_t)i < L) g_act_chbits[i] = (bits[i] == '1') ? '1' : '0';
+    g_act_chbits[g_act_chvis] = '\0';
+}
+
+/* 写某一级的开关，整体重写。撑死几百行，不值得搞增量更新。
+ *   bits 非空且非空串 -> 追加第 4 列（条目级位串）。
+ * ★ 行缓冲从 256 放大到 768：加了位串列之后一行能到约 490 字节，256 会
+ *   **静默截断** —— fgets/snprintf 截断都不报错，位串会悄悄丢尾巴。 */
+static int cheat_set(const char *pid, const char *rom, int scope, int on,
+                     const char *bits)
+{
+    if (!pid || !pid[0]) return 0;
+
+    static char keep[256][768];
+    int n = 0;
+    FILE *fh = fopen(CHEATS_PATH, "r");
+    if (fh) {
+        char line[768];
+        while (fgets(line, sizeof(line), fh)) {
+            size_t Lq = strlen(line);
+            while (Lq && (line[Lq - 1] == '\n' || line[Lq - 1] == '\r')) line[--Lq] = '\0';
+            if (!line[0]) continue;
+            if (cheat_line_matches(line, pid, rom, scope)) continue;   /* 旧的丢掉 */
+            if (n < 256) snprintf(keep[n++], sizeof(keep[0]), "%s", line);
+        }
+        fclose(fh);
+    }
+
+    char nl[768];
+    if (scope == 1) snprintf(nl, sizeof(nl), "%s\t*\t%d", pid, on ? 1 : 0);
+    else            snprintf(nl, sizeof(nl), "%s\t%s\t%d",
+                            pid, (rom && rom[0]) ? rom : "", on ? 1 : 0);
+    if (bits && bits[0]) {
+        size_t bl = strlen(nl);
+        if (bl + 1 + strlen(bits) < sizeof(nl)) {
+            nl[bl] = '\t';
+            snprintf(nl + bl + 1, sizeof(nl) - bl - 1, "%s", bits);
+        }
+    }
+    if (n < 256) snprintf(keep[n++], sizeof(keep[0]), "%s", nl);
+
+    FILE *w = fopen(CHEATS_PATH, "w");
+    if (!w) return 0;
+    for (int i = 0; i < n; i++) fprintf(w, "%s\n", keep[i]);
+    fclose(w);
+    return 1;
+}
+
+/* 这个游戏在 cheats.txt 里的键 = ROM 的**文件名**（含扩展名，不含目录）。
+ * ★ 必须和宿主对齐 —— vagaretro-shell.py 那边用的是 os.path.basename(rom)。 */
+static const char *cheat_rom_name(Platform *p)
+{
+    static char buf[256];
+    buf[0] = '\0';
+    if (!p || g_act_gi < 0 || g_act_gi >= p->ngames) return buf;
+    const char *rel = p->games[g_act_gi].rel;
+    if (!rel || !rel[0]) return buf;
+    const char *sl = strrchr(rel, '/');
+    snprintf(buf, sizeof(buf), "%s", sl ? sl + 1 : rel);
+    return buf;
+}
+
 /* ---- /opt/vagaretro/cores.txt：用户挑的模拟器核心 ----------------------
    与 favorites.txt 同款格式（一行一条，TAB 分隔）：
        <平台id>\t<核心名>                 平台级
@@ -8750,110 +9717,9 @@ static int shader_set(const char *core, const char *rel)
     return 1;
 }
 
-/* ---- /opt/vagaretro/slots.txt：按**游戏**记的存档位 ----------------------
-   一行一条 `<pid>\t<rel>\t<位号>`，位号 0..5（0 = 关闭）。
-   ⚠ 2026-09-16 去掉「保存存档」后由四列砍成三列。**读的时候 3 或 4 列都认**
-     （老文件是 `pid\trel\t加载位\t保存位`，第 4 段直接忽略），
-     所以盘上已有的老 slots.txt **不用迁移**，位号照样读得出来。
-   和 cores.txt / shaders.txt 的区别：那张表按 <pid>/(<pid,rel>) 或 <core> 索引，
-   这张**只按游戏** —— 存档文件本来就是每个游戏一套，位号跟着游戏走最自然。
-
-   读：命中返回 1，位号写进 *load；没有这一行返回 0（置 0）。
-   ⚠ 不缓存（和 shader_get 同一个取舍：文件不到 1KB，而"改完下一次启动
-     立刻生效"比省这一次读盘重要得多）。 */
-static int slot_read(const char *pid, const char *rel, int *load)
-{
-    if (load) *load = 0;
-    if (!pid || !pid[0] || !rel || !rel[0]) return 0;
-
-    FILE *fh = fopen(SLOTS_PATH, "r");
-    if (!fh) return 0;
-
-    char line[SLOT_LINE];
-    int hit = 0;
-    while (fgets(line, sizeof(line), fh)) {
-        size_t L = strlen(line);
-        while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = '\0';
-        if (!line[0] || line[0] == '#') continue;
-
-        /* 按 TAB 切前 3 段。只比前两段 —— 别拿整行 strncmp：pid 是前缀关系
-           （DC / DC2、N64 / N64DD）时整行比会误伤。
-           第 4 段（老格式的"保存位"）留在 cur 里不管，反正不再用它。 */
-        char *f[3] = { NULL, NULL, NULL };
-        int nf = 0;
-        char *cur = line;
-        while (nf < 3) {
-            f[nf++] = cur;
-            char *t = strchr(cur, '\t');
-            if (!t) break;
-            *t = '\0';
-            cur = t + 1;
-        }
-        if (nf < 3 || !f[0] || !f[1]) continue;
-        if (strcmp(f[0], pid) != 0 || strcmp(f[1], rel) != 0) continue;
-
-        int a = atoi(f[2]);
-        if (a < 0 || a >= SLOT_N) a = 0;
-        if (load) *load = a;
-        hit = 1;
-        break;
-    }
-    fclose(fh);
-    return hit;
-}
-
-/* 写一个游戏的存档位，整体重写文件（和 shader_set 一样的偷懒法）。
-   位号为 0 = 删掉这个游戏那一行（用户在列表里选「关闭」）。
-   成功返回 1。只有这一个游戏的行会被动，别的游戏原样保留。
-   ⚠ 新写出去的是**三列**；被保留的别的游戏那几行是**原样拷贝**（老的四列行
-     不会被动），哪一行被用户重新选过就顺手变成三列 —— 读的时候两种都认，
-     所以这个"半迁移"状态是安全的。 */
-static int slot_write(const char *pid, const char *rel, int load)
-{
-    if (!pid || !pid[0] || !rel || !rel[0]) return 0;
-    if (load < 0 || load >= SLOT_N) load = 0;
-
-    static char keep[SLOT_MAXLINES][SLOT_LINE];
-    const int KMAX = (int)(sizeof(keep) / sizeof(keep[0]));
-    int n = 0;
-
-    FILE *fh = fopen(SLOTS_PATH, "r");
-    if (fh) {
-        char line[SLOT_LINE];
-        while (fgets(line, sizeof(line), fh)) {
-            size_t L = strlen(line);
-            while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = '\0';
-            if (!line[0]) continue;
-
-            /* 只丢掉"这个游戏"那一条 —— 按 TAB 切前两段来比 */
-            char tmp[SLOT_LINE];
-            snprintf(tmp, sizeof(tmp), "%s", line);
-            char *t1 = strchr(tmp, '\t');
-            if (t1) {
-                *t1 = '\0';
-                char *t2 = strchr(t1 + 1, '\t');
-                if (t2) {
-                    *t2 = '\0';
-                    if (strcmp(tmp, pid) == 0 && strcmp(t1 + 1, rel) == 0) continue;
-                }
-            }
-            if (n < KMAX) snprintf(keep[n++], sizeof(keep[0]), "%s", line);
-        }
-        fclose(fh);
-    }
-
-    if (load && n < KMAX)
-        snprintf(keep[n++], sizeof(keep[0]), "%s\t%s\t%d", pid, rel, load);
-
-    /* 一条都不剩就把文件删掉，别留个空文件让人以为配过什么 */
-    if (n == 0) { remove(SLOTS_PATH); return 1; }
-
-    FILE *w = fopen(SLOTS_PATH, "w");
-    if (!w) return 0;
-    for (int i = 0; i < n; i++) fprintf(w, "%s\n", keep[i]);
-    fclose(w);
-    return 1;
-}
+/* ★ 2026-09-17：slot_read() / slot_write() 随「加载存档」一并删除
+   （它们读写 /opt/vagaretro/slots.txt，那个文件也不再有人生成）。
+   续档改由「退出自动存档」+ 设置页「自动存档位」承担。 */
 
 /* 把 p->cores（逗号分隔）拆成字符串数组，返回数组、个数写进 *n_out。
    就地拆：第一次把逗号换成 '\0'，之后按指针命中缓存直接返回。
@@ -8944,7 +9810,7 @@ static void favorites_load(void)
         if (gi < 0) continue;             /* ROM 已经删了 → 自动掉出收藏，正合适 */
 
         Game *g = &IX.p[pi].games[gi];
-        game_push(fp, g->title, g->rel, g->img);
+        game_push(fp, g->title, g->rel, g->img, g->py);
         fp->games[fp->ngames - 1].src_pid = IX.p[pi].pid;  /* 启动时要靠它 */
         n++;
     }
@@ -9052,7 +9918,7 @@ static void history_load(void)
         if (gi < 0) continue;
 
         Game *g = &IX.p[pi].games[gi];
-        game_push(hp, g->title, g->rel, g->img);
+        game_push(hp, g->title, g->rel, g->img, g->py);
         hp->games[hp->ngames - 1].src_pid = IX.p[pi].pid;   /* 记住真实机种 */
         n++;
     }
@@ -9418,81 +10284,8 @@ static int act_shader_key(Platform *p, SDL_Keycode k)
     return 1;
 }
 
-/* ---- 存档位二级列表（用户 2026-09-16）---------------------------------- */
-
-/* 回读当前位号，光标对准它。
-   读不到 → 停在 0（关闭），这是对的：盘上没有这个游戏的行就是没配过。 */
-static void act_slot_sync(Platform *p)
-{
-    g_act_lcur = 0;
-    g_act_lsel = 0;
-
-    const char *rp  = act_real_pid(p);
-    const char *rel = (p && g_act_gi >= 0 && g_act_gi < p->ngames)
-                      ? p->games[g_act_gi].rel : NULL;
-    if (!rp || !rel) return;
-
-    int load = 0;
-    if (!slot_read(rp, rel, &load)) return;
-    g_act_lcur = load;
-    if (g_act_lcur < 0 || g_act_lcur >= SLOT_N) g_act_lcur = 0;
-    g_act_lsel = g_act_lcur;
-}
-
-/* 二级列表的按键。返回 1 = 已消费（和 act_key 一个约定）。 */
-static int act_slot_key(Platform *p, SDL_Keycode k)
-{
-    switch (k) {
-    case SDLK_UP:
-        g_act_lsel = (g_act_lsel + SLOT_N - 1) % SLOT_N;
-        mark_dirty();
-        return 1;
-
-    case SDLK_DOWN:
-        g_act_lsel = (g_act_lsel + 1) % SLOT_N;
-        mark_dirty();
-        return 1;
-
-    case SDLK_ESCAPE:
-    case SDLK_BACKSPACE:
-        g_act_slot = 0;                      /* 只退二级列表，主弹层还开着 */
-        mark_dirty();
-        return 1;
-
-    case SDLK_RETURN:
-    case SDLK_KP_ENTER:
-        break;
-
-    default:
-        return 1;                            /* 模态：别的键吞掉 */
-    }
-
-    if (!p || g_act_gi < 0 || g_act_gi >= p->ngames) {
-        g_act_slot = 0;
-        mark_dirty();
-        return 1;
-    }
-
-    const char *rp  = act_real_pid(p);
-    const char *rel = p->games[g_act_gi].rel;
-    int load = g_act_lsel;
-
-    if (!slot_write(rp, rel, load)) {
-        fprintf(stderr, "[存档位] 写不了 %s\n", SLOTS_PATH);
-        fflush(stderr);
-        set_flash("设置失败：写不了 slots.txt");
-    } else {
-        printf("[存档位] %s %s：加载位=%d\n", rp ? rp : "?", rel, load);
-        fflush(stdout);
-        set_flash(load ? "已记录：启动这个游戏时从该位置读档"
-                       : "已关闭：启动不再自动读档");
-        act_slot_sync(p);                    /* 回读：状态行立刻对上 */
-    }
-
-    g_act_slot = 0;                          /* 选完回主弹层 */
-    mark_dirty();
-    return 1;
-}
+/* ★ 2026-09-17：act_slot_sync() / act_slot_key() 随「加载存档」一并删除。
+   见 draw_slot_list() 上面的墓碑注释。 */
 
 static void act_open(int pi, int gi)
 {
@@ -9510,6 +10303,294 @@ static void act_open(int pi, int gi)
     mark_dirty();
 }
 
+/* ---- 金手指二级列表（用户 2026-09-18）----------------------------------
+   行 0 = 适用范围（仅本游戏 / 整个平台），行 1 = 总开关，
+   行 2.. = 这一份 cht 里的**每条具体功能**（"具体什么功能的开关没显示"
+   是浪总当晚追加的需求）。
+   没有"候选文件"这一说 —— 文件是**自动匹配**的，玩家不需要选。
+   库里匹配到哪一份、有几条，写在副标题里（draw_cheat_list 那段）。 */
+static void act_cheat_refresh(Platform *p)
+{
+    g_act_chscope = 0;
+    g_act_chon    = 0;
+    g_act_chlib   = 0;
+    g_act_chcount = 0;
+    g_act_chvis   = 0;
+    g_act_chfile[0] = '\0';
+    g_act_chtop   = 0;
+
+    const char *rp  = act_real_pid(p);
+    const char *rom = cheat_rom_name(p);
+    if (!rp || !rp[0] || !rom[0]) return;
+
+    /* 匹配要用的另两个键：完整 rel（取子目录名）和显示名（⑤ NAMEex）。
+       ⚠ rel 取不到就退回 rom —— 否则会从"按文件名找"退化成"找不到"。 */
+    const char *rel = (g_act_gi >= 0 && g_act_gi < p->ngames)
+                      ? p->games[g_act_gi].rel : NULL;
+    const char *ttl = (g_act_gi >= 0 && g_act_gi < p->ngames)
+                      ? p->games[g_act_gi].title : NULL;
+    if (!rel || !rel[0]) rel = rom;
+
+    /* ① 先扫库：填 g_act_chdesc[] / g_act_chcount / g_act_chvis，
+          并把 bits 复位成"全开"。**必须排在 ② 前面** —— scan 会重置 bits，
+          反过来会把玩家存的记录冲掉。 */
+    g_act_chlib = cheat_scan(rp, rel, ttl, g_act_chfile, sizeof(g_act_chfile),
+                             &g_act_chcount);
+
+    /* ② 再读开关记录（游戏级优先，没有再看平台级）。 */
+    int v = 0;
+    char bits[CHEAT_MAX + 2];
+    if (cheat_get(rp, rom, 0, &v, bits, sizeof(bits))) {
+        g_act_chscope = 0; g_act_chon = v; cheat_apply_bits(bits);
+    } else if (cheat_get(rp, rom, 1, &v, bits, sizeof(bits))) {
+        g_act_chscope = 1; g_act_chon = v; cheat_apply_bits(bits);
+    }
+
+    /* 光标夹回合法范围（换了 cht / 条数变了的时候） */
+    int nr = cheat_nrow();
+    if (g_act_chsel >= nr) g_act_chsel = nr - 1;
+    if (g_act_chsel < 0)     g_act_chsel = 0;
+    act_cheat_scroll();
+}
+
+static void act_cheat_sync(Platform *p)
+{
+    act_cheat_refresh(p);
+}
+
+/* ---- 弹层里「金手指」这一项要不要显示（用户 2026-09-18）----------------
+   原话："如果这个游戏没有金手指 弹层就不用显示金手指了"。
+   判据 = 库里能不能找到这个游戏的 cht（cheat_find_file）。
+   找不到就**整项隐藏** —— 以前会留一个点进去只有一句
+   "库里没有这个平台的金手指"的废项，看着像坏了。
+
+   ★ 带缓存：draw_act_popup() 每帧都问，而 cheat_find_file() 要
+     opendir+readdir（一个平台目录里上千个 cht），绝不能每帧扫一遍。
+     缓存键 = 弹层当前指向的 (平台, 游戏)，换游戏自动失效。
+   ★ 用 cheat_find_file() 而不是 cheat_scan()：后者有副作用（重置 bits）。 */
+static int g_act_chavail    = 0;          /* 1 = 有这个游戏的金手指 */
+static int g_act_chavail_pi = -2, g_act_chavail_gi = -2;   /* -2 = 还没算过 */
+
+static int act_cheat_avail(Platform *p)
+{
+    if (!p) return 0;
+    if (g_act_chavail_pi == g_act_pi && g_act_chavail_gi == g_act_gi)
+        return g_act_chavail;
+
+    g_act_chavail_pi = g_act_pi;
+    g_act_chavail_gi = g_act_gi;
+    g_act_chavail    = 0;
+
+    /* 弹层还没指向有效游戏（刚开、或 --act 之前的空档）—— 直接算"没有"。
+       ⚠ 这句必须在下面那个 printf 之前：它要按 g_act_gi 取游戏名。 */
+    if (g_act_gi < 0 || g_act_gi >= p->ngames) return 0;
+
+    const char *rp  = act_real_pid(p);
+    const char *rom = cheat_rom_name(p);
+    const char *rel = p->games[g_act_gi].rel;      /* 完整相对路径（取子目录名用） */
+    const char *ttl = p->games[g_act_gi].title;    /* 显示名（⑤ NAMEex 用） */
+    if (!rel || !rel[0]) rel = rom;
+    if (rp && rp[0] && rom[0]) {
+        char fn[256];
+        g_act_chavail = cheat_find_file(rp, rel, ttl, fn, sizeof(fn));
+        printf("[金手指] 弹层显不显示这一项：%s / %s -> %s\n",
+               p->name, p->games[g_act_gi].title,
+               g_act_chavail ? "有，显示" : "库里没有，整项隐藏");
+        fflush(stdout);
+    }
+    return g_act_chavail;
+}
+
+/* 弹层实际显示几行；以及"第 r 行 ↔ 第几个 ACT_* 项"的互相换算。
+   藏掉的那一项在它后面的项整体上移一格（金手指是第 5 项，删除第 6 项）。 */
+static int act_rows(Platform *p)
+{
+    return ACT_N - (act_cheat_avail(p) ? 0 : 1);
+}
+static int act_row2idx(Platform *p, int r)
+{
+    if (!act_cheat_avail(p) && r >= ACT_CHEAT) return r + 1;
+    return r;
+}
+static int act_idx2row(Platform *p, int i)
+{
+    if (!act_cheat_avail(p) && i == ACT_CHEAT) return -1;   /* 这一项被藏了 */
+    if (!act_cheat_avail(p) && i >  ACT_CHEAT) return i - 1;
+    return i;
+}
+/* 光标所在的项被藏了（从有金手指的游戏移到没有的）就挪回"启动游戏"。
+   act_open() / --act 之后、以及 draw 每帧都会走一遍，保证不变鬼。 */
+static void act_sel_fix(Platform *p)
+{
+    if (!p || g_act_sel < 0 || g_act_sel >= ACT_N) { g_act_sel = ACT_START; return; }
+    if (act_idx2row(p, g_act_sel) < 0) g_act_sel = ACT_START;
+}
+
+/* 切"适用范围"那一行：换级之后必须**回读那一级的值**，否则显示的还是上一级的。
+   读不到就回落到"关 + 全关"（那一级没配过 = 出厂状态，条目一条都不勾）。 */
+static void act_cheat_flip_scope(Platform *p)
+{
+    g_act_chscope = g_act_chscope ? 0 : 1;
+    int v = 0;
+    const char *rp  = act_real_pid(p);
+    const char *rom = cheat_rom_name(p);
+    char bits[CHEAT_MAX + 2];
+    if (rp && rp[0] && rom[0] &&
+        cheat_get(rp, rom, g_act_chscope, &v, bits, sizeof(bits))) {
+        g_act_chon = v;
+        cheat_apply_bits(bits);
+    } else {
+        g_act_chon = 0;
+        for (int i = 0; i < g_act_chvis; i++) g_act_chbits[i] = '0';
+        g_act_chbits[g_act_chvis] = '\0';
+    }
+}
+
+/* 滚动钳制：光标永远留在可视区里。算法与 act_shader_scroll() 同一套
+   （那个是 2026-09-16 截图特意调过的）。
+   ★ CHEAT_VIS = 9 是**实测**出来的：2026-09-18 截图量到面板可用高度
+     （hmax − head_h − foot_h ≈ 488px）除以行高（≈50px）能摆 9 行多点，
+     所以取 9，比 CORE_VIS=10 保守一档。draw 那边还会按剩余高度再缩一次，
+     两边不会打架。 */
+#define CHEAT_VIS 9
+static void act_cheat_scroll(void)
+{
+    int n = cheat_nrow();
+    if (n <= CHEAT_VIS) { g_act_chtop = 0; return; }
+    if (g_act_chsel < g_act_chtop) g_act_chtop = g_act_chsel;
+    if (g_act_chsel > g_act_chtop + CHEAT_VIS - 1)
+        g_act_chtop = g_act_chsel - CHEAT_VIS + 1;
+    if (g_act_chtop > n - CHEAT_VIS) g_act_chtop = n - CHEAT_VIS;
+    if (g_act_chtop < 0) g_act_chtop = 0;
+}
+
+/* 二级列表的按键。返回 1 = 已消费（和 act_key 一个约定）。 */
+static int act_cheat_key(Platform *p, SDL_Keycode k)
+{
+    int nr = cheat_nrow();
+
+    switch (k) {
+    case SDLK_UP:
+    case SDLK_DOWN:
+        g_act_chsel += (k == SDLK_DOWN) ? 1 : -1;
+        if (g_act_chsel < 0)   g_act_chsel = nr - 1;     /* 环绕，和核心/着色器一致 */
+        if (g_act_chsel >= nr) g_act_chsel = 0;
+        act_cheat_scroll();
+        mark_dirty();
+        return 1;
+
+    case SDLK_LEFT:
+    case SDLK_RIGHT:
+        /* 跟核心列表第 0 行一个手感：**就地切换，不关列表** —— 切完接着看开关。
+           行 0 换适用范围、行 1 翻总开关、行 2+ 翻那一条具体功能。
+           ★ 这里只改内存不写盘，A 才落盘（提示写的就是"←→ 切换 · A 确认"）。 */
+        if (g_act_chsel == 0) {
+            act_cheat_flip_scope(p);
+        } else if (g_act_chsel == 1) {
+            g_act_chon = g_act_chon ? 0 : 1;
+        } else {
+            int i = g_act_chsel - 2;
+            if (i >= 0 && i < g_act_chvis)
+                g_act_chbits[i] = (g_act_chbits[i] == '0') ? '1' : '0';
+        }
+        mark_dirty();
+        return 1;
+
+    case SDLK_ESCAPE:
+    case SDLK_BACKSPACE:
+        g_act_cheat = 0;                     /* 只退二级列表，主弹层还开着 */
+        mark_dirty();
+        return 1;
+
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER:
+        break;
+
+    default:
+        return 1;                            /* 模态：别的键吞掉 */
+    }
+
+    if (!p || g_act_gi < 0 || g_act_gi >= p->ngames) {
+        g_act_cheat = 0;
+        mark_dirty();
+        return 1;
+    }
+
+    /* A 落在"适用范围"上 = 跟左右键一样，就地切换 */
+    if (g_act_chsel == 0) { act_cheat_flip_scope(p); return 1; }
+
+    const char *rp  = act_real_pid(p);
+    const char *rom = cheat_rom_name(p);
+    if (!rp || !rp[0] || !rom[0]) { g_act_cheat = 0; mark_dirty(); return 1; }
+
+    /* standalone 平台（NDS/PSP/SS 那些）不走 retroarch，金手指挂不上去。
+       照写不误是没意义的 —— 宿主那侧也会因为找不到 *_libretro.so 而跳过，
+       这里直说一句，免得玩家以为开了却没生效。 */
+    const char *core = act_cur_core(p);
+    if (!core || !core[0]) {
+        set_flash("这个平台不走 RetroArch，金手指用不了");
+        g_act_cheat = 0;
+        mark_dirty();
+        return 1;
+    }
+
+    /* ---- A 落在具体功能那一行：翻这一位 + 落盘，**但不关列表** ----
+       玩家通常是连着调好几条（"无限命"要、"双激光"不要），每条都关一次
+       列表太难受。 */
+    if (g_act_chsel >= 2) {
+        int i = g_act_chsel - 2;
+        if (i >= g_act_chvis) { mark_dirty(); return 1; }
+        g_act_chbits[i] = (g_act_chbits[i] == '0') ? '1' : '0';
+        if (cheat_set(rp, rom, g_act_chscope, g_act_chon, g_act_chbits)) {
+            printf("[金手指] 条目%d「%s」-> %s（%s / %s）\n",
+                   i, g_act_chdesc[i], g_act_chbits[i] == '0' ? "关" : "开", rp, rom);
+            fflush(stdout);
+            set_flash(g_act_chon ? "已记录，下次启动这个游戏生效"
+                                 : "已记录（总开关还关着，先把它打开）");
+        } else {
+            fprintf(stderr, "[金手指] 写不了 %s\n", CHEATS_PATH);
+            fflush(stderr);
+            set_flash("保存失败：写不了 cheats.txt");
+        }
+        mark_dirty();
+        return 1;
+    }
+
+    /* ---- A 落在总开关上：翻 + 落盘，写完回主弹层 ----
+       （跟核心/着色器"选完就回"一致） */
+    int nv = g_act_chon ? 0 : 1;
+    if (cheat_set(rp, rom, g_act_chscope, nv, g_act_chbits)) {
+        g_act_chon = nv;
+        printf("[金手指] %s %s：%s（%s，匹配 %s / %d 条）\n",
+               nv ? "开启" : "关闭", rom,
+               g_act_chscope ? "整个平台" : "仅本游戏", rp,
+               g_act_chlib ? g_act_chfile : "未找到", g_act_chcount);
+        fflush(stdout);
+        if (!nv) {
+            set_flash("已关闭，下次启动这个游戏不加载金手指");
+        } else if (!g_act_chlib) {
+            set_flash("已记录（库里没找到匹配的金手指，等于没开）");
+        } else {
+            /* ★ 条目默认**一条都不勾**（浪总 2026-09-18 晚："点进去的功能
+               不要默认都是开启的，容易出bug"）。所以光开总开关是没用的 ——
+               这里必须说清楚，否则玩家进游戏发现"金手指没反应"。 */
+            int any = 0;
+            for (int i = 0; i < g_act_chvis; i++)
+                if (g_act_chbits[i] == '1') { any = 1; break; }
+            if (any) set_flash("已记录，下次启动这个游戏生效");
+            else     set_flash("已开启，但一条功能都没勾 —— 把想要的按 A 打开");
+        }
+    } else {
+        fprintf(stderr, "[金手指] 写不了 %s\n", CHEATS_PATH);
+        fflush(stderr);
+        set_flash("保存失败：写不了 cheats.txt");
+    }
+
+    g_act_cheat = 0;
+    mark_dirty();
+    return 1;
+}
+
 /* 弹层开着时的按键。返回 1 = 已消费（调用方直接 return）。
    弹层是**模态**的：没认出来的键也一律吃掉，免得底下页面跟着动。 */
 static int act_key(SDL_Keycode k)
@@ -9518,8 +10599,8 @@ static int act_key(SDL_Keycode k)
 
     /* 二级列表开着就全归它：它的行数跟主弹层不一样（还多一组左右键），
        必须在下面那个按 ACT_N 取模的光标循环**之前**分流出去。 */
-    if (g_act_slot)   return act_slot_key(p, k);
     if (g_act_shader) return act_shader_key(p, k);
+    if (g_act_cheat)  return act_cheat_key(p, k);
     if (g_act_core)   return act_core_key(p, k);
 
     switch (k) {
@@ -9528,7 +10609,16 @@ static int act_key(SDL_Keycode k)
         /* 一动光标就撤销"待确认" —— 否则选到删除上按了 A、又移到别处，
            回来再按 A 就会直接删掉，白瞎一道确认。 */
         g_act_ask = 0;
-        g_act_sel = (g_act_sel + (k == SDLK_DOWN ? 1 : ACT_N - 1)) % ACT_N;
+        /* ★ 按**显示行**走位，不能按项号取模（2026-09-18）：金手指项藏掉时
+           项号是有洞的（第 5 项没了，删除顶上来），按 ACT_N=7 取模会走到
+           那个画不出来的项上 —— 表现成"按一下 ↓，选中框凭空消失"。 */
+        {
+            int nr  = act_rows(p);
+            int row = act_idx2row(p, g_act_sel);
+            if (row < 0) row = 0;
+            if (nr > 0)  row = (row + (k == SDLK_DOWN ? 1 : nr - 1)) % nr;
+            g_act_sel = act_row2idx(p, row);
+        }
         mark_dirty();
         return 1;
 
@@ -9604,22 +10694,6 @@ static int act_key(SDL_Keycode k)
         return 1;
     }
 
-    /* ---- 加载存档 / 保存存档：展开二级列表（选五个存档位之一）----
-       语义见 SLOTS_PATH 那段注释：前端不在游戏现场，只能在**启动游戏时**
-       把位号交给 RetroArch，所以只剩"加载"一个方向（进游戏自动读该位）。
-       「保存存档」2026-09-16 按用户要求去掉（原话："保存只能在 RA 完成"）——
-       要"退出时自动存"走「退出自动存档」那一项。 */
-    if (g_act_sel == ACT_LOAD) {
-        g_act_slot = 1;
-        act_slot_sync(p);
-        printf("[存档位] 打开列表：%s / %s（加载，当前 %s）\n",
-               p->name, p->games[g_act_gi].title,
-               g_act_lcur ? SLOT_LABEL[g_act_lcur] : "(关闭)");
-        fflush(stdout);
-        mark_dirty();
-        return 1;
-    }
-
     /* ---- 退出自动存档：就地切换（开关型，不像核心那样展开二级列表）---- */
     if (g_act_sel == ACT_AUTOSV) {
         /* ⚠ 必须落到**真实平台**上：在「游玩历史 / 我的收藏」里打开的弹层，
@@ -9633,6 +10707,21 @@ static int act_key(SDL_Keycode k)
                    on ? "开启" : "关闭", p->name, rp ? rp : "?");
         else
             fprintf(stderr, "[自动存档] 写不了 %s\n", AUTOSAVE_PATH);
+        fflush(stdout);
+        mark_dirty();
+        return 1;
+    }
+
+    /* ---- 金手指：展开二级列表（不是就地切换）---- */
+    if (g_act_sel == ACT_CHEAT) {
+        g_act_cheat = 1;
+        /* 默认停在"开关"那一行 —— 点进这一页十有八九就是想开关它 */
+        g_act_chsel = 1;
+        act_cheat_sync(p);
+        printf("[金手指] 打开：%s / %s（%s，库中 %s / %d 条）\n",
+               p->name, p->games[g_act_gi].title,
+               g_act_chon ? "开" : "关",
+               g_act_chlib ? g_act_chfile : "未找到", g_act_chcount);
         fflush(stdout);
         mark_dirty();
         return 1;
@@ -9669,7 +10758,9 @@ static int act_key(SDL_Keycode k)
  * 目录名由 main() 从 argv[1] 的索引路径推导（换成 --index 也跟得上）。
  * ---------------------------------------------------------------------- */
 static char g_desc_dir[288] = "/opt/vagaretro/desc";
-static char g_desc_buf[1600];
+/* 一条描述最多 Python 侧截的 1000 个汉字（UTF-8 最长 3 字节/字 → 3000 字节），
+   留够余量。原来只有 1600，长描述会被 snprintf 截掉半截。 */
+static char g_desc_buf[4096];
 static int  g_desc_pi = -1;
 static int  g_desc_gi = -1;
 
@@ -9690,16 +10781,28 @@ static const char *game_desc(const Platform *p, int gi)
     FILE *f = fopen(path, "r");
     if (!f) return g_desc_buf;                 /* 原卡没有 desc 目录 —— 正常 */
 
-    char line[1800];
+    /* ⚠⚠ 千万别拿 fgets 的"调用次数"当行号。
+       fgets 的语义是「读满缓冲 **或** 遇到换行就返回」—— 长描述会被**切成
+       好几段**，每段都算一次调用。实测（2026-09-16）：
+         · 宿主写 desc 时每条截 1000 个汉字 = UTF-8 最多 3000 字节；
+         · 缓冲只有 1800 → SFC 第 5 条（1991 字节）被切成 2 段；
+         · 于是**从第 6 个游戏开始，介绍的整个行号永久错位 1**，
+           越往后错得越多 —— ARCADE 有 164 条超长，末尾能错到 160 多位，
+           等于整个平台的介绍全是别人的（用户报"介绍和游戏对不上"）。
+       所以：n 只在「上一段是以换行结束的」时才递增；缓冲也放大到能一次
+       装下一条。                           —— 2026-09-16 修 */
+    char line[4096];
     int  n = 0;
+    int  cont = 0;                 /* 1 = 这一段是上一行的续段，不算新行 */
     while (fgets(line, sizeof(line), f)) {
-        if (n++ == gi) {
-            size_t L = strlen(line);
+        size_t L = strlen(line);
+        if (!cont && n++ == gi) {
             while (L && (line[L - 1] == '\n' || line[L - 1] == '\r'))
                 line[--L] = '\0';
             snprintf(g_desc_buf, sizeof(g_desc_buf), "%s", line);
             break;
         }
+        cont = !(L > 0 && line[L - 1] == '\n');
     }
     fclose(f);
     return g_desc_buf;
@@ -9726,10 +10829,13 @@ static int desc_avail(const Platform *p)
 /* 自动折行画一段文本，最多画 maxh 高；放不下的末行截断补 "…"。
    中文逐字断（TTF_SizeUTF8 量出来的就是 UTF-8 字符宽度），够用。
    ⚠ 天马把换行写成**字面** `\n`（反斜杠 + n，不是真换行），一并当换行处理。 */
-static void draw_para(TTF_Font *f, const char *s, int x, int y,
-                      int w, int maxh, Uint32 col)
+/* 返回值 = **实际画了几行**；`dry` 非 0 时只数不画 ——
+   draw_act_popup() 的右栏靠它把介绍整段做垂直居中。 */
+static int draw_para(TTF_Font *f, const char *s, int x, int y,
+                     int w, int maxh, Uint32 col, int dry)
 {
-    if (!f || !s || !*s || w <= 0 || maxh <= 0) return;
+    int lines = 0;
+    if (!f || !s || !*s || w <= 0 || maxh <= 0) return 0;
     int lh = TTF_FontLineSkip(f);
     if (lh <= 0) lh = 24;
     int maxl = maxh / lh;
@@ -9789,21 +10895,23 @@ static void draw_para(TTF_Font *f, const char *s, int x, int y,
                                (unsigned char)fit[fl - 2] == 0x80 &&
                                (unsigned char)fit[fl - 1] == 0xA6);
                 if (!has_ell && fl + 4 < sizeof(fit)) strcat(fit, "…");
-                if (fit[0] && TTF_SizeUTF8(f, fit, &lw, &lhh) == 0)
+                if (!dry && fit[0] && TTF_SizeUTF8(f, fit, &lw, &lhh) == 0)
                     blit(REN, bake_cached(REN, f, fit, col, &lw, &lhh),
                          x, y + li * lh, lw, lhh);
+                lines = li + 1;
                 break;
             }
-            if (line[0] && TTF_SizeUTF8(f, line, &lw, &lhh) == 0)
+            if (!dry && line[0] && TTF_SizeUTF8(f, line, &lw, &lhh) == 0)
                 blit(REN, bake_cached(REN, f, line, col, &lw, &lhh),
                      x, y + li * lh, lw, lhh);
             li++;
             ln = 0;
             line[0] = '\0';
-            if (!*q) break;
+            if (!*q) { lines = li; break; }
         }
         q += adv;
     }
+    return lines;
 }
 
 /* 玻璃拟态弹层。背景用 glass_panel() —— 那是设置页同一套**真·背景模糊**
@@ -9822,8 +10930,8 @@ static void draw_act_popup(void)
     /* 二级列表整个换一套版式（行数是变的），所以压在压暗层之后直接交给它。
        放在这里而不是函数开头：那层压暗是两边共用的，提早 return 会让
        二级列表下面亮着一片，模态感就没了。 */
-    if (g_act_slot)   { draw_slot_list();   return; }
     if (g_act_shader) { draw_shader_list(); return; }
+    if (g_act_cheat)  { draw_cheat_list();  return; }
     if (g_act_core)   { draw_core_list();   return; }
 
     /* ACT_LABEL / ACT_FOOT 已提到文件作用域 —— 二级列表 draw_core_list()
@@ -9862,15 +10970,14 @@ static void draw_act_popup(void)
         }
     }
     /* 右侧状态字：收藏/删除各自两个文案都量一遍，取最宽 ——
-       否则"从内存卡删除"六个字会把标签挤掉。
-       "位置 5" 也量一下：存档位那两行的状态字（用户 2026-09-16）。 */
+       否则"从内存卡删除"六个字会把标签挤掉。 */
     int vw_max = 0, vh_max = 0;
     {
-        static const char *const VS[7] = {
+        static const char *const VS[6] = {
             "未收藏", "已收藏", "从内存卡删除", "再按一次确认",
-            "已开启", "已关闭", "位置 5"
+            "已开启", "已关闭"
         };
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 6; i++) {
             int a = 0, b = 0;
             if (TTF_SizeUTF8(F_SETV, VS[i], &a, &b) == 0) {
                 if (a > vw_max) vw_max = a;
@@ -9935,34 +11042,40 @@ static void draw_act_popup(void)
     }
 
     /* ---- 定高：每一段都按量出来的字高累加，不再有"魔法高度" ----
-       ★ 2026-09-16 加了「加载存档 / 保存存档」之后项目从 6 条涨到 8 条，
-         原来那句 "h 超了就一刀切到屏幕内" 会**把最后两行连底部提示一起裁掉**
+       ★ 2026-09-16 加「加载存档 / 保存存档」时项目一度涨到 8 条，原来那句
+         "h 超了就一刀切到屏幕内" 会**把最后两行连底部提示一起裁掉**
          （和 draw_shader_list 当初踩的是同一个坑：设 12 行时最后一行被底边
          截断、整条按键提示不见了）。这里改成**压行高**：项目数是死的
          （靠 ↑↓ 循环，没有滚动），所以只能从行高里省。
          下限 = 字高 + 14px，再挤就真糊了；真到那一步宁可略微超屏收尾，
-         也不画成一坨分不清的行。 */
-    const int rad    = S(24);
+         也不画成一坨分不清的行。
+       ★ 2026-09-17 删掉「加载存档」后回到 6 条，这段逻辑照样保留 ——
+         它跟项数无关，保证的是"任何项数都不裁切"。 */
+    const int rad    = S(30);   /* 圆角比原来大一圈，玻璃面板更柔 */
     const int head_h = S(26) + th + S(10) + sh + S(18);
     int row_h  = (lh_max > vh_max ? lh_max : vh_max) + S(28) + S(10);
-    int row_in = row_h - S(10);
+    int row_in = row_h - S(14);
     const int foot_h = S(18) + fh_max + S(16);
     const int hmax   = g_win_h - S(72);
-    if (head_h + row_h * ACT_N + foot_h > hmax) {
-        int rh2  = (hmax - head_h - foot_h) / ACT_N;
+    /* ★ 行数是**变的**：库里没这个游戏的金手指就不显示那一项（2026-09-18）。
+       所以不能再用常数 ACT_N —— 高度、循环、光标走位三处全得跟着 nrow 走，
+       否则要么底部被裁、要么空出一行。 */
+    const int nrow = act_rows(p);
+    if (head_h + row_h * nrow + foot_h > hmax) {
+        int rh2  = (hmax - head_h - foot_h) / nrow;
         int rmin = (lh_max > vh_max ? lh_max : vh_max) + S(14);
         if (rh2 < rmin) rh2 = rmin;
         row_h  = rh2;
-        row_in = row_h - S(10);              /* 行框比行距小一圈 = 行间留白 */
+        row_in = row_h - S(14);              /* 行框比行距小一圈 = 行间留白 */
     }
-    int h = head_h + row_h * ACT_N + foot_h;
+    int h = head_h + row_h * nrow + foot_h;
     /* 极端字号（fs_ui 到 160%）下的最后一道保险：宁可裁一点，也不能让
        面板上半截跑到屏幕外 —— 顶部出去之后标题就看不见了。 */
     if (h > g_win_h - S(36)) h = g_win_h - S(36);
     SDL_Rect rc = { (g_win_w - w) / 2, (g_win_h - h) / 2, w, h };
 
     glass_panel(rc, rad, C_PANEL, 232);
-    draw_round(REN, rc, rad, C_LINE, 72);              /* 一圈细边 */
+    draw_round(REN, rc, rad, C_LINE, 96);              /* 一圈细边（72→96，暗底上太虚了）*/
 
     /* --- 标题：游戏名（只有真放不下才收省略号）--- */
     char nm[256];
@@ -9984,8 +11097,12 @@ static void draw_act_popup(void)
     SDL_RenderFillRect(REN, &sep);
 
     /* --- 那一列菜单项（宽度用 wl，两栏时不会压到右边的介绍）--- */
+    /* 光标所在的项要是被藏了（nrow 刚变小），先挪回"启动游戏"再画 ——
+       否则这一帧会没有任何一行是选中态，看着像光标丢了。 */
+    act_sel_fix(p);
     int y = rc.y + head_h;
-    for (int i = 0; i < ACT_N; i++) {
+    for (int r = 0; r < nrow; r++) {
+        int i      = act_row2idx(p, r);          /* 行号 -> ACT_* 项号 */
         SDL_Rect row = { rc.x + ROWIN, y, wl - ROWIN * 2, row_in };
         int on     = (i == g_act_sel);
         int danger = (i == ACT_DEL);
@@ -9999,10 +11116,14 @@ static void draw_act_popup(void)
 
         Uint32 fg = on ? 0xffffff : (danger ? C_DANGER : C_TEXT);
 
-        /* 左边一条小色块当图标位 */
-        SDL_Rect chip = { row.x + S(20), row.y + (row.h - S(32)) / 2, S(6), S(32) };
-        draw_round(REN, chip, S(3),
-                   danger ? C_DANGER : (on ? 0xffffff : C_ACCENT), 235);
+        /* 左边一条小色块当图标位 —— **只在选中行显示**。
+           原来每行都挂一条，未选中时那一列蓝竖线看着像排打字光标，很吵；
+           未选中的行靠文字层次和留白区分就够了。
+           选中底色本身就是 C_ACCENT / C_DANGER，所以 chip 一律反白。 */
+        if (on) {
+            SDL_Rect chip = { row.x + S(18), row.y + (row.h - S(36)) / 2, S(6), S(36) };
+            draw_round(REN, chip, S(3), 0xffffff, 240);
+        }
 
         /* 右侧状态字先量 —— 标签的可用宽度就是"行宽 − 两侧留白 − 状态字" */
         char vbuf[128];
@@ -10016,15 +11137,6 @@ static void draw_act_popup(void)
                             : ((p->core && p->core[0]) ? p->core : "自动");
             core_label_into(cv, vbuf, sizeof(vbuf));
             val = vbuf;
-        }
-        else if (i == ACT_LOAD) {
-            /* 存档位是**按游戏**记的（slots.txt 里一行一个游戏）。
-               读不到就显示"关闭"，别显示成 0 或空白。 */
-            const char *rp  = act_real_pid(p);
-            const char *rel = p->games[g_act_gi].rel;
-            int cur = 0;
-            slot_read(rp ? rp : p->pid, rel, &cur);
-            val = (cur >= 1 && cur < SLOT_N) ? SLOT_LABEL[cur] : "关闭";
         }
         else if (i == ACT_AUTOSV) {
             const char *rp = act_real_pid(p);
@@ -10072,18 +11184,40 @@ static void draw_act_popup(void)
         setc(REN, C_LINE, 110);
         SDL_RenderFillRect(REN, &vl);
 
-        draw_para(F_SETV, (desc && desc[0]) ? desc : "暂无介绍",
-                  bx, by + S(8), wr, bh - S(16), C_SUBTEXT);
+        /* 介绍整段**垂直居中**：左栏行数固定、面板高度被它锁死，
+           介绍却长短不一；顶对齐时短介绍下面空掉半栏，看着"上挤下空"。
+           先干跑一遍数行数（一行都不画），再按行高算偏移重画一次。 */
+        const char *dtxt = (desc && desc[0]) ? desc : "暂无介绍";
+        int availh = bh - S(16);
+        int dlh = TTF_FontLineSkip(F_SETV);
+        if (dlh <= 0) dlh = S(24);
+        int dl  = draw_para(F_SETV, dtxt, bx, 0, wr, availh, C_SUBTEXT, 1);
+        int maxl = availh / dlh;
+        if (maxl >= 1 && dl > maxl) dl = maxl;
+        int dy  = by + S(8);
+        int dph = dl * dlh;
+        if (dph < availh) dy += (availh - dph) / 2;
+        draw_para(F_SETV, dtxt, bx, dy, wr, availh, C_SUBTEXT, 0);
     }
 
-    /* --- 底部按键提示 --- */
+    /* --- 底部按键提示 ---
+       上面补一条分隔线，和标题下那条同色同透明度 —— 两栏/菜单才像一个整体，
+       否则底部提示看着像浮在菜单行上面。
+       ⚠ 用 nrow 不是 ACT_N：金手指项藏掉时少一行，这两个 y 跟着上移，
+         不然提示会悬在面板下面 S(一个行高) 的位置。 */
+    {
+        SDL_Rect fsep = { rc.x + S(22), rc.y + head_h + row_h * nrow + S(3),
+                          w - S(44), 1 };
+        setc(REN, C_LINE, 90);
+        SDL_RenderFillRect(REN, &fsep);
+    }
     char ffit[96];
     ellipsize(F_SETF, ACT_FOOT[g_act_ask ? 1 : 0], w - S(40), ffit, sizeof(ffit));
     int fw = 0, fh = 0;
     blit(REN, bake_cached(REN, F_SETF, ffit,
                           g_act_ask ? C_DANGER : C_SUBTEXT, &fw, &fh),
          rc.x + (w - fw) / 2,
-         rc.y + head_h + row_h * ACT_N + (foot_h - fh) / 2, fw, fh);
+         rc.y + head_h + row_h * nrow + (foot_h - fh) / 2, fw, fh);
 }
 
 /* 「更换模拟器核心」的二级列表。
@@ -10185,7 +11319,7 @@ static void draw_core_list(void)
     if (w > wmax) w = wmax;
 
     /* ---- 定高 ---- */
-    const int rad    = S(24);
+    const int rad    = S(30);   /* 圆角比原来大一圈，玻璃面板更柔 */
     const int head_h = S(26) + th + S(10) + sh + S(18);
     const int row_in = (lh_max > vh_max ? lh_max : vh_max) + S(28);
     const int row_h  = row_in + S(10);
@@ -10358,7 +11492,7 @@ static void draw_shader_list(void)
     if (w > wmax) w = wmax;
 
     /* ---- 定高 ---- */
-    const int rad    = S(24);
+    const int rad    = S(30);   /* 圆角比原来大一圈，玻璃面板更柔 */
     const int head_h = S(26) + th + S(10) + sh + S(18);
     const int row_in = (lh_max > vh_max ? lh_max : vh_max) + S(28);
     const int row_h  = row_in + S(10);
@@ -10454,61 +11588,84 @@ static void draw_shader_list(void)
          rc.y + head_h + row_h * nvis + (foot_h - fh) / 2, fw, fh);
 }
 
-/* 存档位二级列表（用户 2026-09-16）。版式照 draw_shader_list，只有两点不同：
-     ① 行数固定 6 行（关闭 + 位置 1..5），**不做滚动** —— 和弹层同一个理由：
-        项目少就该一次看全，滚动只会多一层操作。高度不够就压行高，
-        下限同样是"字高 + 14px"，保证五个位置永远都选得到。
-     ② 状态字只有一种："当前"（挂在生效那一行上）。
-   副标题说清方向：这一屏只管"启动时自动读档"（「保存存档」2026-09-16 已去掉）。 */
-static void draw_slot_list(void)
+/* 金手指二级页（用户 2026-09-18）。就两行：适用范围 + 开关。
+   版式和 draw_core_list() 同一套"先量后排"，只是行数固定 2。
+
+   副标题是这一页唯一的"检测结果"：库里匹配到哪一份、几条金手指。
+   玩家得看见这个才知道开了到底有没有用 —— 尤其"库里压根没有"这种情况，
+   不写出来他会以为是自己没操作对。 */
+static void draw_cheat_list(void)
 {
     Platform *p = act_plat();
     if (!p || g_act_gi < 0 || g_act_gi >= p->ngames) {
         g_act_on = 0;
-        g_act_slot = 0;
+        g_act_cheat = 0;
         return;
     }
 
-    /* 和 draw_act_popup / draw_core_list / draw_shader_list 完全相同的间距常数 */
+    /* 和 draw_act_popup / draw_shader_list 完全相同的间距常数 */
     const int PADX = S(34);
     const int ROWIN = S(16);
     const int LBX  = S(44);
     const int VBR  = S(24);
     const int GAP  = S(26);
 
-    const int nrow = SLOT_N;
+    const int nrow = cheat_nrow();           /* 0 适用范围 / 1 总开关 / 2.. 每条功能 */
+    int nvis = (nrow > CHEAT_VIS) ? CHEAT_VIS : nrow;
 
     /* ---- 量标题 ---- */
     int tw = 0, th = 0;
     if (TTF_SizeUTF8(F_H1, p->games[g_act_gi].title, &tw, &th) != 0) { tw = 0; th = 0; }
 
-    char sub[224];
-    snprintf(sub, sizeof(sub), "加载存档：启动这个游戏时自动读出来 · %s",
-             p->name);
+    const char *core = act_cur_core(p);
+    char sub[320];
+    if (!core || !core[0])
+        snprintf(sub, sizeof(sub), "金手指 · %s · 这个平台不走 RetroArch", p->name);
+    else if (!g_act_chlib)
+        snprintf(sub, sizeof(sub), "金手指 · %s · 库里没有这个平台的金手指", p->name);
+    else if (g_act_chcount > CHEAT_MAX)
+        snprintf(sub, sizeof(sub), "金手指 · %s · %s（共 %d 条，只列前 %d）",
+                 p->name, g_act_chfile, g_act_chcount, CHEAT_MAX);
+    else
+        snprintf(sub, sizeof(sub), "金手指 · %s · 已找到 %s（%d 条）",
+                 p->name, g_act_chfile, g_act_chcount);
     int sw = 0, sh = 0;
     if (TTF_SizeUTF8(F_PSUB, sub, &sw, &sh) != 0) { sw = 0; sh = 0; }
 
-    /* ---- 量标签 ---- */
+    /* ---- 量标签：最长的一行 ---- */
     int lw_max = 0, lh_max = 0;
-    for (int i = 0; i < nrow; i++) {
+    {
         int a = 0, b = 0;
-        if (TTF_SizeUTF8(F_SETN, SLOT_LABEL[i], &a, &b) == 0) {
+        if (TTF_SizeUTF8(F_SETN, SCOPE_LABEL, &a, &b) == 0) { lw_max = a; lh_max = b; }
+        if (TTF_SizeUTF8(F_SETN, CHEAT_SW_LABEL, &a, &b) == 0) {
             if (a > lw_max) lw_max = a;
             if (b > lh_max) lh_max = b;
         }
     }
 
-    /* ---- 量右侧状态字（只有"当前"）---- */
+    /* ---- 量右侧状态字：两种适用范围 + 开/关 ---- */
     int vw_max = 0, vh_max = 0;
-    if (TTF_SizeUTF8(F_SETV, "当前", &vw_max, &vh_max) != 0) { vw_max = 0; vh_max = 0; }
+    {
+        static const char *const VS[4] = { "仅本游戏", "整个平台", "开", "关" };
+        for (int i = 0; i < 4; i++) {
+            int a = 0, b = 0;
+            if (TTF_SizeUTF8(F_SETV, VS[i], &a, &b) == 0) {
+                if (a > vw_max) vw_max = a;
+                if (b > vh_max) vh_max = b;
+            }
+        }
+    }
 
     /* ---- 量底部提示 ---- */
     int fw_max = 0, fh_max = 0;
-    if (TTF_SizeUTF8(F_SETF, SLOT_FOOT, &fw_max, &fh_max) != 0) { fw_max = 0; fh_max = 0; }
+    if (TTF_SizeUTF8(F_SETF, CHEAT_FOOT, &fw_max, &fh_max) != 0) {
+        fw_max = 0;
+        fh_max = 0;
+    }
 
     /* ---- 定宽 ---- */
     int w = g_win_w * 46 / 100;
-    int need = (sw > tw ? sw : tw) + PADX * 2;
+    int need = (tw > sw ? tw : sw) + PADX * 2;
     if (need > w) w = need;
     need = fw_max + PADX * 2;
     if (need > w) w = need;
@@ -10517,35 +11674,37 @@ static void draw_slot_list(void)
     int wmax = g_win_w - S(72);
     if (w > wmax) w = wmax;
 
-    /* ---- 定高：行数固定，放不下就压行高（不裁、不滚动）---- */
-    const int rad    = S(24);
+    /* ---- 定高 ---- */
+    const int rad    = S(30);
     const int head_h = S(26) + th + S(10) + sh + S(18);
-    int row_h  = (lh_max > vh_max ? lh_max : vh_max) + S(28) + S(10);
-    int row_in = row_h - S(10);
+    const int row_in = (lh_max > vh_max ? lh_max : vh_max) + S(28);
+    const int row_h  = row_in + S(10);
     const int foot_h = S(18) + fh_max + S(16);
-    const int hmax   = g_win_h - S(72);
-    if (head_h + row_h * nrow + foot_h > hmax) {
-        int rh2  = (hmax - head_h - foot_h) / nrow;
-        int rmin = (lh_max > vh_max ? lh_max : vh_max) + S(14);
-        if (rh2 < rmin) rh2 = rmin;
-        row_h  = rh2;
-        row_in = row_h - S(10);
+    int h = head_h + row_h * nvis + foot_h;
+    int hmax = g_win_h - S(72);
+    if (h > hmax) {
+        /* 行高是按字号算的，字号调大之后 6 行也可能超 —— 那就少摆几行，
+           别把面板压扁（压扁会把最后一行和底部提示一起裁掉，
+           draw_shader_list 2026-09-16 踩过这个）。 */
+        int room = hmax - head_h - foot_h;
+        nvis = room / row_h;
+        if (nvis < 1) nvis = 1;
+        if (nvis > nrow) nvis = nrow;
+        h = head_h + row_h * nvis + foot_h;
     }
-    int h = head_h + row_h * nrow + foot_h;
-    if (h > g_win_h - S(36)) h = g_win_h - S(36);
     SDL_Rect rc = { (g_win_w - w) / 2, (g_win_h - h) / 2, w, h };
 
     glass_panel(rc, rad, C_PANEL, 232);
     draw_round(REN, rc, rad, C_LINE, 72);
 
-    /* ---- 标题：游戏名 + "加载/保存存档" ---- */
+    /* ---- 标题：游戏名 + "金手指 · 平台名" ---- */
     char nm[256];
     ellipsize(F_H1, p->games[g_act_gi].title, w - PADX * 2, nm, sizeof(nm));
     int tw2 = 0, th2 = 0;
     blit(REN, bake_cached(REN, F_H1, nm, C_TEXT, &tw2, &th2),
          rc.x + PADX, rc.y + S(26), tw2, th2);
 
-    char sub2[256];
+    char sub2[352];
     ellipsize(F_PSUB, sub, w - PADX * 2, sub2, sizeof(sub2));
     int sw2 = 0, sh2 = 0;
     blit(REN, bake_cached(REN, F_PSUB, sub2, C_SUBTEXT, &sw2, &sh2),
@@ -10555,53 +11714,78 @@ static void draw_slot_list(void)
     setc(REN, C_LINE, 150);
     SDL_RenderFillRect(REN, &sep);
 
-    /* ---- 行 ---- */
+    /* ---- 滚动窗口里的 nvis 行 ----
+       行 0/1 是固定项，行 2+ 是这一份 cht 的具体功能（浪总要的就是它）。
+       条目行给个短一号的 chip，视觉上从属于上面两项。 */
     int y = rc.y + head_h;
-    for (int i = 0; i < nrow; i++) {
+    for (int k = 0; k < nvis; k++) {
+        int i = g_act_chtop + k;                 /* 真实行号（滚动后的） */
+        if (i < 0 || i >= nrow) break;
+
         SDL_Rect row = { rc.x + ROWIN, y, w - ROWIN * 2, row_in };
-        int on = (i == g_act_lsel);
+        int on = (i == g_act_chsel);
+        int is_item = (i >= 2);
 
         if (on) draw_round(REN, row, S(12), C_ACCENT, 150);
         Uint32 fg = on ? 0xffffff : C_TEXT;
 
-        SDL_Rect chip = { row.x + S(20), row.y + (row.h - S(32)) / 2, S(6), S(32) };
-        draw_round(REN, chip, S(3), on ? 0xffffff : C_ACCENT, 235);
+        SDL_Rect chip;
+        if (is_item) {
+            chip.x = row.x + S(22); chip.y = row.y + (row.h - S(18)) / 2;
+            chip.w = S(4);          chip.h = S(18);
+        } else {
+            chip.x = row.x + S(20); chip.y = row.y + (row.h - S(32)) / 2;
+            chip.w = S(6);          chip.h = S(32);
+        }
+        draw_round(REN, chip, S(3), on ? 0xffffff : C_ACCENT, is_item ? 170 : 235);
 
-        /* 第 0 行（关闭）也能是"当前"——位号为 0 就是它，所以直接比下标 */
-        const char *val = (i == g_act_lcur) ? "当前" : NULL;
+        const char *lab;
+        const char *val;
+        if (i == 0) {
+            lab = SCOPE_LABEL;
+            val = SCOPE_VALUE[g_act_chscope ? 1 : 0];
+        } else if (i == 1) {
+            lab = CHEAT_SW_LABEL;
+            val = g_act_chon ? "开" : "关";
+        } else {
+            int ci = i - 2;
+            lab = (ci < g_act_chvis) ? g_act_chdesc[ci] : "";
+            val = (g_act_chbits[ci] == '0') ? "关" : "开";
+        }
 
         int vw = 0, vh = 0;
         char vfit[64];
         vfit[0] = '\0';
-        if (val) {
-            ellipsize(F_SETV, val, row.w - LBX - S(60), vfit, sizeof(vfit));
-            if (TTF_SizeUTF8(F_SETV, vfit, &vw, &vh) != 0) { vw = 0; vh = 0; }
-        }
+        ellipsize(F_SETV, val, row.w - LBX - S(60), vfit, sizeof(vfit));
+        if (TTF_SizeUTF8(F_SETV, vfit, &vw, &vh) != 0) { vw = 0; vh = 0; }
 
-        char lfit[192];
-        ellipsize(F_SETN, SLOT_LABEL[i], row.w - LBX - VBR - (vw ? vw + GAP : 0),
+        char lfit[256];
+        ellipsize(F_SETN, lab, row.w - LBX - VBR - (vw ? vw + GAP : 0),
                   lfit, sizeof(lfit));
         int lw = 0, lh = 0;
         blit(REN, bake_cached(REN, F_SETN, lfit, fg, &lw, &lh),
              row.x + LBX, row.y + (row.h - lh) / 2, lw, lh);
 
-        if (val) {
-            /* 选中行的状态字必须反白 —— 底色是强调色，再用灰色就糊了 */
-            Uint32 vc = on ? 0xffffff : C_SUBTEXT;
-            blit(REN, bake_cached(REN, F_SETV, vfit, vc, &vw, &vh),
-                 row.x + row.w - VBR - vw, row.y + (row.h - vh) / 2, vw, vh);
-        }
+        /* ⚠ 右侧字是"当前值"（不是核心列表那种"当前/非当前"标记），
+           所以无脑跟着反白走 —— 选中行白字，其余灰字。 */
+        blit(REN, bake_cached(REN, F_SETV, vfit, on ? 0xffffff : C_SUBTEXT, &vw, &vh),
+             row.x + row.w - VBR - vw, row.y + (row.h - vh) / 2, vw, vh);
+
         y += row_h;
     }
 
     /* ---- 底部按键提示 ---- */
-    char ffit[96];
-    ellipsize(F_SETF, SLOT_FOOT, w - S(40), ffit, sizeof(ffit));
+    char ffit[128];
+    ellipsize(F_SETF, CHEAT_FOOT, w - S(40), ffit, sizeof(ffit));
     int fw = 0, fh = 0;
     blit(REN, bake_cached(REN, F_SETF, ffit, C_SUBTEXT, &fw, &fh),
          rc.x + (w - fw) / 2,
-         rc.y + head_h + row_h * nrow + (foot_h - fh) / 2, fw, fh);
+         rc.y + head_h + row_h * nvis + (foot_h - fh) / 2, fw, fh);
 }
+
+/* ★ 2026-09-17：draw_slot_list()（弹层的第 3 个二级列表）已整体删除。
+   见文件上方 SLOT_LABEL 那块墓碑注释。 */
+
 
 static void handle_key(SDL_Keycode k)
 {
@@ -11303,6 +12487,44 @@ int main(int argc, char **argv)
     g_view = malloc(sizeof(int) * (size_t)(IX.np + 1));
     build_view();
 
+    /*   --matchdump  把"每个游戏 → 匹配到的 cht"全量打出来（只读、立刻退出、
+     *               **不碰 SDL**，所以不受"要等 12 秒出画面"的拖累）。
+     * 为什么要有它：cheat_find_file() 的匹配规则改一次，就得知道全量影响面 ——
+     *   而 5573 款只有**真机上真跑一遍**才作数，Python 侧的复刻再怎么对齐也会漂移
+     *   （2026-09-18 实锤：模拟器里的白名单多两个词，数字就对不上了，现在改成
+     *   从本文件解析词表）。这条就是给"改完匹配规则立刻对账"用的回归工具。
+     * 输出 TSV（stdout）：平台 \t rel \t 显示名 \t 命中的 cht（空 = 没命中）；
+     *   末行 `#` 开头是汇总。 */
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--matchdump") == 0) {
+            int all = 0, hits = 0;
+            for (int pi = 0; pi < IX.np; pi++) {
+                Platform *p = &IX.p[pi];
+                if (!p->pid || !p->pid[0]) continue;
+                /* ⚠ 收藏/历史是**虚拟平台**，里面的条目是真实平台游戏的副本
+                   （src_pid 指回真实平台）—— 这里必须跳过，否则同一款游戏被数两遍。
+                   ⚠ 也**不能**用 act_real_pid()：它看的是全局游标 g_act_gi
+                   （弹层当前指向哪个游戏），遍历时必须按 gi 自己取，
+                   而且真实平台的游戏 src_pid 恒为 NULL，直接用 p->pid 就对。 */
+                if (strcmp(p->pid, "history") == 0 ||
+                    strcmp(p->pid, "favorite") == 0) continue;
+                for (int gi = 0; gi < p->ngames; gi++) {
+                    const char *rel = p->games[gi].rel;
+                    const char *ttl = p->games[gi].title;
+                    char fn[256];
+                    int h = cheat_find_file(p->pid, rel, ttl, fn, sizeof(fn));
+                    printf("%s\t%s\t%s\t%s\n", p->pid, rel ? rel : "",
+                           ttl ? ttl : "", h ? fn : "");
+                    all++;
+                    if (h) hits++;
+                }
+            }
+            printf("# 合计: %d 款中有 %d 款命中（%.1f%%）\n",
+                   all, hits, all ? hits * 100.0 / all : 0.0);
+            fflush(stdout);
+            return 0;
+        }
+
     /* 搜索结果表：定长，一次拿好。放这里而不是等进搜索页再拿，
        免得"按 Y 那一下"要处理 malloc 失败。 */
     g_res = malloc(sizeof(SRes) * SR_NMAX);
@@ -11610,14 +12832,23 @@ int main(int argc, char **argv)
 
     /*   --act N  直接打开游戏操作弹层、光标停在第 N 项（走真实入口 act_open()，
      *           不是旁路）。配合 --actsub W S 还能把二级列表也展开：
-     *           W = 1 核心列表 / 2 着色器列表，S = 那个列表里的光标行。
+     *           W = 1 核心列表 / 2 着色器列表 / 3 金手指列表，
+     *           S = 那个列表里的光标行。
      *           弹层和两个二级列表的版式都靠它截图核对。
      *           ⚠ 必须放在 --settings 之后 —— settings_open() 会把弹层关掉；
-     *             也得放在 --games/--gsel 之后，它要用那两个算出来的选中项。 */
+     *             也得放在 --games/--gsel 之后，它要用那两个算出来的选中项。
+     *           ★ 2026-09-18 修：--games N 之后，弹层要落在**N 那个平台**上。
+     *             以前只会取 g_view[g_sel]（主页网格的选中项），而 --games
+     *             走的是 enter_games()→g_plat，两者根本不搭界 —— 于是
+     *             "--games 2（FC）--gsel 0" 拍出来的却是"游玩历史 / 三目童子"，
+     *             截图脚本怎么指都指不到想拍的游戏（req626/628/631 连踩三次）。 */
     for (int i = 1; i < argc - 1; i++)
         if (strcmp(argv[i], "--act") == 0) {
             int row = atoi(argv[i + 1]);
-            int pi = (g_sel >= 0 && g_sel < g_view_n) ? g_view[g_sel] : -1;
+            int on_games = (g_page == PAGE_GAMES && g_plat >= 0 && g_plat < IX.np
+                            && IX.p[g_plat].ngames > 0);
+            int pi = on_games ? g_plat
+                              : ((g_sel >= 0 && g_sel < g_view_n) ? g_view[g_sel] : -1);
             int gi = g_gsel;
             /* 落到的平台是空的（分类过滤后头一个是虚拟平台、又恰好没内容）
                就往后找一个真有游戏的 —— 截图脚本不该因为"第一个平台是空的"
@@ -11632,6 +12863,9 @@ int main(int argc, char **argv)
                 if (gi < 0 || gi >= IX.p[pi].ngames) gi = 0;
                 act_open(pi, gi);
                 if (row >= 0 && row < ACT_N) g_act_sel = row;
+                /* row 是**项号**（0=启动 … 5=金手指 / 6=删除）。没有金手指的
+                   游戏第 5 项是藏着的，指到它会被 act_sel_fix() 挪回"启动游戏"。 */
+                act_sel_fix(&IX.p[pi]);
                 mark_dirty();
             }
         }
@@ -11641,12 +12875,14 @@ int main(int argc, char **argv)
             int srow  = atoi(argv[i + 2]);
             Platform *p = act_plat();
             if (g_act_on && p) {
-                /* which: 0/1 = 核心列表，2 = 着色器列表，3 = 加载存档列表（2026-09-16）。
-                   （原来还有个 4 = 保存存档列表，「保存存档」去掉后一并删了） */
+                /* which: 0/1 = 核心列表，2 = 着色器列表，3 = 金手指列表。
+                   （4 = 加载存档列表，2026-09-17 随该功能一起删除） */
                 if (which == 3) {
-                    g_act_slot = 1;
-                    act_slot_sync(p);
-                    if (srow >= 0 && srow < SLOT_N) g_act_lsel = srow;
+                    g_act_cheat = 1;
+                    act_cheat_sync(p);
+                    /* srow 现在能指到条目行了（2..2+条数-1），默认还是总开关那行 */
+                    g_act_chsel = (srow >= 0 && srow < cheat_nrow()) ? srow : 1;
+                    act_cheat_scroll();
                 } else if (which == 2) {
                     g_act_shader = 1;
                     act_shader_sync(p);
@@ -11688,6 +12924,9 @@ int main(int argc, char **argv)
     int prev_sel = -1, prev_scroll = -1, prev_cat = -1;
     int prev_page = -1, prev_gsel = -1, prev_gscroll = -1, prev_plat = -1;
     long prev_min = -1;
+    /* 状态栏四个读数上一轮的值。初值故意取得跟 status_poll() 的初始值不同，
+       这样第一轮必置脏（反正启动第一帧本来就该画）。 */
+    int prev_sv = -2, prev_sb = -2, prev_sc = -9, prev_sw = -2;
     Uint32 t0 = SDL_GetTicks();
     while (running) {
         SDL_Event e;
@@ -11803,6 +13042,28 @@ int main(int argc, char **argv)
             prev_gscroll = g_gscroll;
             prev_plat = g_plat;
             prev_min = cur_min;
+        }
+
+        /* ★★ 状态栏必须在这里**每帧**问一次（status_poll() 内部 1.5 秒节流），
+           不能只挂在 draw_topbar() 里 —— 那条路只有 g_dirty 时才走得到，
+           而重绘条件（光标/滚动/分类/页码/平台/分钟跳变）里**没有**"状态栏读数变了"。
+
+           这就是"按实体音量键，状态栏的音量不会动"的最终根因：
+           实体音量键走 ogage → volume.sh → amixer，**前端一个字的事件都收不到**，
+           于是永远不会置脏、永远不会重绘、draw_topbar() 也就永远不被调用，
+           数字冻在开机那一次；顶多等"分钟跳变"才顺带更新一回。
+           （而 alsa_volume 的缓存问题是**上一层**的 bug，2026-09-18 已先修掉，
+             两层都修完状态栏才会跟着实体键走。）
+
+           检测到变化就置脏，下一句 render() 自然重画。 */
+        status_poll();
+        if (prev_sv != g_st_vol || prev_sb != g_st_bat ||
+            prev_sc != g_st_chg || prev_sw != g_st_wif) {
+            if (prev_sv != g_st_vol)
+                printf("[状态栏] 音量 %d -> %d\n", prev_sv, g_st_vol);
+            prev_sv = g_st_vol; prev_sb = g_st_bat;
+            prev_sc = g_st_chg; prev_sw = g_st_wif;
+            mark_dirty();
         }
 
         int want_shot = (shot_frame > 0 && frames + 1 == shot_frame);

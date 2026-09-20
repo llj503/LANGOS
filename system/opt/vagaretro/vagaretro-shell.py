@@ -93,6 +93,15 @@ PLATFORM_MAP = {
     # J2ME（2026-09-16 新增）：Java 手机游戏。es_systems.cfg 里本来就有 j2me 段
     # （走 RA 的 freej2me 核心），只是从前端这张表里缺了这一行，点进去必死。
     "J2ME":      "j2me",
+    # FILES（2026-09-18 新增）：**文件管理器**，不是模拟器。
+    #   ★★ 这一行不能少 —— build_compat_tree() 是遍历 **PLATFORM_MAP**
+    #   （不是 vg_platforms.PLATFORM_META）来建 <compat_dir>/<pid> 软链的。
+    #   只往 vg_platforms 里加条目的后果实测过：索引里出现一条
+    #   `P FILES other 文件管理器 …` 但**一个 G 行都没有** ——
+    #   因为 prescan 扫的是 compat 树，compat 树没给它开入口，
+    #   于是"没有游戏"⇒ 前端不画卡片（2026-09-16 浪总定的规则）。
+    #   两个表都要登记，缺一不可。
+    "FILES":     "files",
 }
 # 从 es_systems.cfg 里读不到时兜底直接拼 retroarch 命令用的 core 名。
 # 这些名字都是在真镜像的 /home/ark/.config/<emu>/cores/ 里核对过的。
@@ -155,6 +164,16 @@ BAD_CORES = {
 # ES 原配置里 GBA 首选 gpsp_ezode_mod（坏的），我们钉死用 mgba。
 FORCE_CORE = {
     "GBA": "mgba",
+    # PCE（2026-09-17）：ES 首选 mednafen_pce_fast —— 那是"快速简化版"，
+    #   **不支持 SuperGrafx ROM**：遇到 `[SuperGrafx]` 游戏时 CPU 在跑
+    #   （1100+ ticks）、屏幕却永远是 8303 B 纯黑帧，看起来像"跑不起来"。
+    #   同款 ROM 双核心实测对比：
+    #     魔动王（光能使者）   pce_fast 8303 B / Y=0   →  supergrafx 412172 B / Y=61.2
+    #     战争王牌 Battle Ace  pce_fast 8303 B / Y=0   →  supergrafx 289963 B / Y=17.4
+    #   反向验证（会不会把另外几十款普通 PCE 搞坏）：设备侧随机抽 6 款普通 PCE
+    #   用 supergrafx 跑，全部出画面，且 CPU 只占 66~74% 单核 ⇒ 余量充足，可全平台统一。
+    #   ⚠ 设备上**没有** mednafen_pce（完整版），PCE 系只有 pce_fast 与 supergrafx 两个。
+    "PCE": "mednafen_supergrafx",
 }
 
 # ---- 平台级**模拟器**强制指定：无视 es_systems.cfg 里 emulators 的先后 ------
@@ -817,23 +836,50 @@ def _looks_like_rom_root(path):
     return bool(_rom2_probe_names() & kids)
 
 
+def _rom_root_hits(path):
+    """path 下面直接能看到的"已知平台目录"个数（-1 = 这个路径不参与比较）。
+
+    只 listdir 一次、纯内存求交集，代价可以忽略；比逐个候选去 stat 便宜得多。
+    """
+    if not path or not os.path.isdir(path):
+        return -1
+    try:
+        kids = {e.lower() for e in os.listdir(path)}
+    except OSError:
+        return -1
+    return len(_rom2_probe_names() & kids)
+
+
 def _detect_rom2_root(root):
     """把卡二 ROM 根从"挂载点"修正到"真正装 ROM 的那一层"。
 
-    规则很短：原值能直接看到平台目录 → 就用原值；看不到 → 试它下面的
-    `Roms` / `roms`（exFAT 大小写不敏感，两个都试以防万一）；还看不到 → 原值。
+    ★★ 2026-09-17 从"命中 1 个就认"改成**数命中个数、谁多谁赢**。
+       事故经过：修 PPSSPP 时在 /roms2 顶层建了 psp/（PPSSPP 的配置目录
+       必须落在那里），而 "psp" 正好是个已知平台目录名（PLATFORM_MAP 的
+       PSP）→ `_looks_like_rom_root("/roms2")` 命中 1 个就 True →
+       **下沉不再发生**，rom_dir2 停在 /roms2：
+         · FC/SFC/MD/ARCADE 的 compat 实体目录是 09-16 建的、子链还指得对，
+           侥幸活着；
+         · 其余 15 个平台候选全落空 → 退到卡一 /roms/<x>（LANGOS 首启铺的
+           空壳）→ 索引 5595 款 / 19 个带封面平台 掉成 3779 款 / 4 个。
+       判据改成"谁命中的平台目录多谁赢"之后：
+         · 天马卡：/roms2/Roms 命中 ~30，/roms2 只命中 1（psp）→ 下沉 ✓
+         · 原卡  ：/roms2 命中 ~30，/roms2/Roms 不存在（-1）→ 保持原值 ✓
+         · 平手保持原值（= 老行为），不会把能用的布局猜坏。
+       这样"挂载点顶层多出一个碰巧同名的杂目录就整卡翻车"从根上不会再犯。
     """
     if not root or not os.path.isdir(root):
         return root
-    if _looks_like_rom_root(root):
-        return root
+    best, best_hits = root, _rom_root_hits(root)
     for sub in ("Roms", "roms", "ROMs"):
         cand = os.path.join(root, sub)
-        if _looks_like_rom_root(cand):
-            log("卡二 ROM 根自动下沉：%s -> %s（该卡把平台目录放在子目录里）"
-                % (root, cand))
-            return cand
-    return root
+        h = _rom_root_hits(cand)
+        if h > best_hits:
+            best, best_hits = cand, h
+    if best != root:
+        log("卡二 ROM 根自动下沉：%s -> %s（命中 %d 个平台目录）"
+            % (root, best, best_hits))
+    return best
 
 
 def build_compat_tree(systems, rom_dir, compat_dir, rom_dir2="", mode="auto"):
@@ -878,10 +924,25 @@ def build_compat_tree(systems, rom_dir, compat_dir, rom_dir2="", mode="auto"):
         # 见 MULTI_SRC 的注释。只在建实体目录这一步做，后面照常。
         if (pid in MULTI_SRC and rom_dir2 and mode in ("auto", "2")):
             subs = []
+            seen_low = set()
             for sub in MULTI_SRC[pid]:
                 s = _resolve_child(rom_dir2, sub)
                 if os.path.isdir(s):
                     subs.append((sub, s))
+                    seen_low.add(sub.lower())
+            # ★ 第三方整合包（2026-09-17）：名字没法穷举，改成扫 ROM 根认出来。
+            #   只对 ARCADE 做 —— 那些包全是街机 romset，别的平台没有这种玩法。
+            if pid == "ARCADE":
+                try:
+                    known = _known_rom_dirs(systems, rom_dir, rom_dir2)
+                    for nm, full in _discover_arcade_packs(rom_dir2, known):
+                        if nm.lower() in seen_low:
+                            continue
+                        subs.append((nm, full))
+                        seen_low.add(nm.lower())
+                        log("ARCADE 发现整合包目录：%s" % nm)
+                except Exception as e:
+                    log("扫整合包失败（不影响其它）：%s" % e)
             # 只有"真的需要合并"才走这条路 —— 判据是：存在**普通流程命中不了**的子目录。
             # 普通流程的候选里有 pid / pid.lower()，所以只有一个同名声的子目录时
             # 它自己能找到，不必改成"实体目录 + 一层子软链"。
@@ -1173,6 +1234,12 @@ MULTI_SRC = {
         "FBNEO FLY", "FBNEO FLY V",
         "FBNEO FTG", "FBNEO FTG hack",
         "FBNEO STG", "FBNEO STG hack", "FBNEO STG V",
+        # ---- 第三方「中文分组名」整合包（2026-09-17）----
+        # 这类包把街机按玩法拆成中文目录，配一份 gamelist.xml（见
+        # _discover_arcade_packs）。用户如果**只把分组目录**丢进卡二
+        # ROM 根，就靠这里认出来；整个包目录丢进去则由自动发现兜住。
+        "FBNEO街机横版游戏甄选", "FBNEO街机竖版游戏甄选",
+        "FBNEO街机格斗游戏甄选", "FBNEO用NEOGEO增量包",
     ),
     # 改版 / 高清版归回本家机种（天马卡）：一共 1052 个 ROM。
     # 合并后列表里会混进 hack 版游戏 —— 它们本来就是该机种的游戏，
@@ -1181,6 +1248,154 @@ MULTI_SRC = {
     "SFC": ("SFC", "SFC hack"),
     "MD":  ("MD", "MD hack", "MD hack(picodrive)"),
 }
+
+
+# ------------------------------------------------- 第三方整合包自动发现 ----
+# 用户会拿到网上的 FBNEO / MAME 整合包：一个目录里放着 gamelist.xml +
+# 好几个按玩法分的**中文**目录（FBNEO街机横版游戏甄选/…）+ boxart/。
+# 这类目录不属于任何平台，MULTI_SRC 又只能写死名字，于是整包游戏一个都进不了
+# 列表 —— 表现就是"街机 0 个"。所以再加一层：**扫 ROM 根，认出这些包**。
+#
+# 名字里带这些片段的基本可以确定是街机包（省掉解析 XML 的开销）。
+_ARCADE_PACK_PAT = ("fbneo", "mame", "cps", "neogeo", "neo-geo", "pgm",
+                    "arcade", "街机", "capcom", "snk")
+# 判"是不是包"时最多看多少条 <path>（大包 580 条，不必全读）
+_PACK_PROBE_N = 60
+
+
+def _has_group_dirs(path, limit=12):
+    """path 下有没有"装着 ROM 的分组子目录"。
+
+    包的特征是"一层分组目录，zip 都在分组里"；而卡二上原生的街机子库
+    （`fbneo` / `FBNEO ACT`）是**平铺**的，zip 直接在目录下。
+    所以这一条能把"名字碰巧带 fbneo 的普通平台目录"挡在外面，
+    不必只依赖 _known_rom_dirs 那张名字表。
+    """
+    try:
+        names = sorted(os.listdir(path))
+    except OSError:
+        return False
+    seen = 0
+    for n in names:
+        if n.startswith(".") or n.lower() in ROM_SKIP_DIRS:
+            continue
+        sub = os.path.join(path, n)
+        try:
+            if not os.path.isdir(sub):
+                continue
+        except OSError:
+            continue
+        seen += 1
+        try:
+            for f in os.listdir(sub):
+                if os.path.splitext(f)[1].lstrip(".").lower() in ROM_EXTS_SET:
+                    return True
+        except OSError:
+            pass
+        if seen >= limit:
+            break
+    return False
+
+
+def _looks_like_pack_dir(path):
+    """path 是不是一个「游戏整合包」（自成一套、不属于任何已在册平台）。
+
+    必须有 gamelist.xml **且有分组子目录**（见 _has_group_dirs），
+    再满足下面任意一条：
+      ① 目录名带街机特征片段（FBNEO / 街机 / MAME…）；
+      ② gamelist.xml 里的 <path> **大部分带子目录**。
+         包的特征就是"一份 gamelist 管着好几个分组目录"（`./分组/xxx.zip`），
+         而平台目录里那种 gamelist 写的是平铺的 `./xxx.zip`，一眼能分开。
+    """
+    gm = os.path.join(path, "gamelist.xml")
+    if not os.path.isfile(gm):
+        return False
+    if not _has_group_dirs(path):
+        return False
+    low = os.path.basename(path.rstrip("/")).lower()
+    if any(k in low for k in _ARCADE_PACK_PAT):
+        return True
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.parse(gm).getroot()
+    except Exception:
+        return False
+    sub, tot = set(), 0
+    for g in root.findall("game"):
+        p = (g.findtext("path") or "").strip()
+        if not p:
+            continue
+        tot += 1
+        if p.startswith("./"):
+            p = p[2:]
+        p = p.lstrip("/")
+        head = p.split("/")[0]
+        if "/" in p and head:
+            sub.add(head)
+        if tot >= _PACK_PROBE_N:
+            break
+    return len(sub) >= 2
+
+
+def _discover_arcade_packs(rom_dir2, known):
+    """在卡二 ROM 根下找出整合包目录 -> [(目录名, 绝对路径)]。
+
+    known = 已知平台目录名（小写集合）。**必须先排除它们** —— 否则平台目录里
+    那份 gamelist.xml（卡二上确实有，如 arcade/CapcomOthers/）会被误判成包，
+    把 GBA/FC 整个平台的游戏搬去街机。
+    """
+    out = []
+    if not rom_dir2:
+        return out
+    try:
+        names = sorted(os.listdir(rom_dir2))
+    except OSError:
+        return out
+    for name in names:
+        if name.startswith("."):
+            continue
+        full = os.path.join(rom_dir2, name)
+        try:
+            if not os.path.isdir(full):
+                continue
+        except OSError:
+            continue
+        if name.lower() in known:
+            continue
+        try:
+            if _looks_like_pack_dir(full):
+                out.append((name, full))
+        except OSError:
+            continue
+    return out
+
+
+def _known_rom_dirs(systems, rom_dir, rom_dir2):
+    """卡上"这就是某个平台目录"的名字集合（小写）。用于把整合包认出来。
+
+    三个来源都要收：前端 id（`FC`）、卡上的目录名（`PLATFORM_MAP` 的**值**，
+    如 `nes` / `arcade` / `fbneo`）、es_systems 里的 path 末段。
+    ★ 光收前端 id 是不够的 —— 卡上根本不存在叫 `fc` 的目录（req 实测：
+    `nes=False`），漏了值就等于这道闸门形同虚设。
+    """
+    known = set()
+    for pid, sysdir in PLATFORM_MAP.items():
+        known.add(pid.lower())
+        for part in str(sysdir or "").split("/"):
+            if part:
+                known.add(part.lower())
+    for v in ROM2_DIRNAME.values():
+        for part in str(v or "").split("/"):
+            if part:
+                known.add(part.lower())
+    for subs in MULTI_SRC.values():
+        for s in subs:
+            known.add(s.lower())
+    for sysname in (systems or {}):
+        d = _sys_dirname(systems, sysname)
+        if d:
+            known.add(d.lower())
+    return known
 
 
 def _dir_has_rom(path, depth=2):
@@ -1210,25 +1425,66 @@ def _dir_has_rom(path, depth=2):
     return False
 
 
-def _find_cover_dir(real):
-    """在平台真实目录下找封面目录，按 COVER_SUBDIRS 的顺序试，第一个存在的赢。
+def _dir_count(d, cap=200000):
+    """目录里有多少个条目；不是目录 / 读不了返回 0。
 
-    找不到就再往**下一层**找一次 —— ARCADE 是合并目录（实体目录 + 各子库软链），
-    封面在 arcade/media/images 这种子库里，光看根目录永远找不到。
+    ★ 2026-09-17：`_find_cover_dir` 用它挑封面目录。只判"非空"是不够的 ——
+    用户往 `<平台>/images/` 丢一张图，就会把原来 `<平台>/media/` 那几百张
+    （天马结构）整个挤掉，表现是"某个游戏有封面的反而没了"。
+    改成**比条目数，取大的那个**。scandir 是懒惰的，拿够就停。
     """
+    n = 0
+    try:
+        with os.scandir(d) as it:
+            for _ in it:
+                n += 1
+                if n >= cap:
+                    break
+    except OSError:
+        return 0
+    return n
+
+
+def _best_cover_cand(cands):
+    """[(条目数, 路径)] -> 条目数最大的那个路径；并列时保留**原顺序**（稳定排序）。
+
+    原顺序 = COVER_SUBDIRS 的优先级（images > img > image > media …），
+    所以规模相同时"images"仍然优先。
+    """
+    if not cands:
+        return ""
+    cands = sorted(cands, key=lambda x: -x[0])
+    return cands[0][1]
+
+
+def _find_cover_dir(real):
+    """在平台真实目录下找封面目录。
+
+    **第一段**（平台根下的 `<real>/images`、`<real>/media` …）：候选里**条目数
+    最多**的赢。为什么要看规模 —— 用户往 `<平台>/images/` 丢一张图，就会把原来
+    `<平台>/media/` 那几百张（天马结构）整个挤掉，表现是"本来有封面的反而没了"。
+
+    **第二段**（往下一层找，只有 ARCADE 这种合并目录会走到）：仍然是
+    **第一个非空的赢** —— 这是既有行为，2026-09-17 特意不动它：改这段会让
+    ARCADE 的 imgdir 从 `FBNEO ACT/media` 漂到别的子库，属于无谓的变动。
+    """
+    top = []
     for sub in COVER_SUBDIRS:
-        cand = os.path.join(real, sub)
-        if os.path.isdir(cand):
-            return cand
+        c = os.path.join(real, sub)
+        n = _dir_count(c)
+        if n:
+            top.append((n, c))
+    if top:
+        return _best_cover_cand(top)
     try:
         for name in sorted(os.listdir(real)):
             sub_real = os.path.join(real, name)
             if not os.path.isdir(sub_real):
                 continue
             for sub in COVER_SUBDIRS:
-                cand = os.path.join(sub_real, sub)
-                if os.path.isdir(cand):
-                    return cand
+                c = os.path.join(sub_real, sub)
+                if _dir_count(c):
+                    return c
     except OSError:
         pass
     return ""
@@ -1268,29 +1524,132 @@ def _media_index(root):
     return c
 
 
+# 封面文件名缓存：同一目录只探一次（file 名和 game 名常常指向同一个目录）
+_COVER_CACHE = {}
+# 该 stat 的候选名。**大小写两种都列** —— exFAT 虽然给了 upcase 表，
+# 但卡上天马写出来的是 `boxFront.png` 和 `boxfront.jpg` 混着的。
+_COVER_TRY = ("boxFront.jpg", "boxFront.png", "boxfront.jpg", "boxfront.png",
+              "boxFront.jpeg", "boxfront.jpeg", "boxFront.webp", "boxfront.webp")
+# 排错用：走了多少次 stat、多少次被迫退化成 listdir
+_BOX_STAT_N = [0]
+_BOX_LSDIR_N = [0]
+
+
 def _box_in(d):
     """目录 d 里的封面文件（真存在才返回）。天马用 boxFront.jpg/png 两种命名。
 
-    ⚠ 这里**只 listdir 一次**、靠返回值判断存在性，不做 `os.path.isfile` 试探。
-      原来的写法要把 6 个候选名各 stat 一遍（街机 1500 个游戏 = 上万次系统
-      调用，exFAT 上每次都是几十毫秒级的抖动）。listdir 一次就把目录里有什么
-      全拿回来了，比对纯内存 —— 实测整个 gen-index 从 49 s 回到 31 s。
+    先按名 stat 几个候选（大小写都列），全 miss 才退化成一次 listdir 兜底。
+
+    ⚠ 关于"先 stat 还是先 listdir"（2026-09-17 实测，别再凭直觉改）：
+      这张 exFAT TF 卡上**一次冷目录访问就是 6.8 ms**（req277 基准），
+      stat 和 listdir 一个量级 —— 慢的是卡，不是选了哪个 syscall。
+        · 串行 listdir 版：6860 次 / 40.9 s
+        · 串行 stat 版  ：16116 次 / 44.7 s（一次命中约 1.7 个候选）
+        · 16 线程 stat 版：真实冷跑 50 s —— 并发救不了串行化的卡
+      所以**别指望改这一行能提速**。真正的解药是上面那份持久缓存
+      （_COVER_DISK）：探过一次就不再碰卡。
+      保持"stat 优先"的理由只剩一条 —— 它一次只问一个文件名，
+      命中率 100%（req277：400/400 命中 boxFront.jpg），比整目录读更干净。
     """
+    hit = _COVER_CACHE.get(d)
+    if hit is not None:
+        return hit
+    hashed = _COVER_DISK.get(d)         # 上次跑记住的，别再碰这张卡
+    if hashed is not None:
+        p = "" if hashed == "-" else os.path.join(d, hashed)
+        _COVER_CACHE[d] = p
+        return p
+    p = ""
+    _BOX_STAT_N[0] += 1
+    for fn in _COVER_TRY:
+        c = os.path.join(d, fn)
+        if os.path.isfile(c):
+            p = c
+            break
+    if not p:
+        # 罕见命名（BoxFront.JPG / boxFront.gif / 带后缀变体）才退化成一次 listdir
+        _BOX_LSDIR_N[0] += 1
+        try:
+            names = os.listdir(d)
+        except OSError:
+            names = []
+        low = {}
+        for n in names:
+            low.setdefault(n.lower(), n)
+        for fn in ("boxfront.jpg", "boxfront.png", "boxfront.jpeg", "boxfront.webp"):
+            if fn in low:
+                p = os.path.join(d, low[fn])
+                break
+        else:
+            for n in sorted(names):
+                if n.lower().startswith("boxfront"):
+                    p = os.path.join(d, n)
+                    break
+    _COVER_CACHE[d] = p
+    _COVER_DISK[d] = os.path.basename(p) if p else "-"
+    return p
+
+
+# ---- 封面名持久缓存 --------------------------------------------------------
+#
+# ★★ 这是「切换内存卡卡住了」的根治（2026-09-17）。
+#
+# 现象：切「游戏来源」时前端要同步跑一次 --gen-index，整个界面卡在一张
+#       "正在重扫游戏…"的图上 **50 秒**，按键全无响应。
+#
+# 实测定位：
+#   · cProfile：50.4 s 里 44.7 s 全在 posix.stat / posix.listdir，上万次调用
+#     —— 就是下面 _box_in() 逐目录探封面。
+#   · req277 基准（/roms2/Roms/FC/media 前 400 个目录）：
+#       串行探 boxFront.jpg   2.73 s  → **6.8 ms / 次**
+#       同一批再探一遍         0.02 s  →  0.05 ms / 次（已进 page cache）
+#     ⇒ 慢的是**这张 TF 卡的冷目录读**（6.8 ms），不是选了哪个 syscall。
+#   · 于是换 syscall（listdir→stat）和上 16 线程**都没效果**：
+#       48 s → 57 s → 50 s，三次都在噪声里。并发救不了串行化的卡。
+#
+# 结论：只有一条路 —— **少碰目录**。6600+ 个 media 目录的封面名一年也不变，
+#       探一次写到这份缓存里，之后每次 gen-index 直接命中内存：
+#       第二次开始 50 s → 5 s 级。
+#
+# 失效：缓存只记"目录 -> 文件名"。目录没了/改名了不会再出现（无副作用）；
+#       万一艺术图被改名，会指到旧文件名（表现为该游戏没封面）。
+#       要强制重探：删掉这个文件，或 `rm` 后跑一次 --gen-index。
+_COVER_CACHE_PATH = "/opt/vagaretro/cover-cache.tsv"
+_COVER_DISK = {}
+
+
+def _load_cover_cache():
+    n = 0
     try:
-        names = os.listdir(d)
+        with open(_COVER_CACHE_PATH, "r", encoding="utf-8") as fh:
+            for ln in fh:
+                ln = ln.rstrip("\n")
+                if not ln or ln.startswith("#"):
+                    continue
+                d, _, fn = ln.partition("\t")
+                if d and fn:
+                    _COVER_DISK[d] = fn
+                    n += 1
     except OSError:
-        return ""
-    low = {}
-    for n in names:
-        low.setdefault(n.lower(), n)
-    for fn in ("boxfront.jpg", "boxfront.png", "boxfront.jpeg", "boxfront.webp"):
-        if fn in low:
-            return os.path.join(d, low[fn])
-    # 名字有细微差异时再兜一次：目录下第一个 boxfront*
-    for n in sorted(names):
-        if n.lower().startswith("boxfront"):
-            return os.path.join(d, n)
-    return ""
+        pass
+    return n
+
+
+def _save_cover_cache():
+    tmp = _COVER_CACHE_PATH + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(_COVER_CACHE_PATH), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("# 目录<TAB>封面文件名（\"-\" = 探过、确实没有）\n")
+            fh.write("# vagaretro-shell.py 自动维护。删掉它就会全部重探（慢一次）。\n")
+            for d in sorted(_COVER_DISK):
+                fh.write("%s\t%s\n" % (d, _COVER_DISK[d]))
+        os.replace(tmp, _COVER_CACHE_PATH)
+    except OSError as e:
+        log("封面缓存写不进去（不影响索引）: %s" % e)
+
+
+_LOADED_COVERS = _load_cover_cache()
 
 
 def _pegasus_cover(root, game_name, file_base, front_rel=""):
@@ -1339,15 +1698,79 @@ def _pegasus_cover(root, game_name, file_base, front_rel=""):
     return ""
 
 
+# ---- 扁平封面目录（一个目录里平铺 <游戏名>.<ext>）------------------------
+# 区别于天马那种"一游戏一目录"的 media/<名>/boxFront.png。
+# ★ 这条是用户 2026-09-17 点名要的：`GBA/images/` 里放的就是
+#   `<ROM 名>.png`，没有 gamelist 列表，全靠同名不同后缀对上号。
+FLAT_COVER_SUBDIRS = ("images", "img", "image", "boxart", "boxarts", "covers",
+                      "cover", "snap", "screenshots", "previews", "media",
+                      "artwork", "art", "box", "titles", "title")
+FLAT_COVER_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+
+_FLAT_CACHE = {}        # 目录 -> {名字小写: 绝对路径}；探过的空目录记 False
+_FLAT_CACHE_MAX = 6000
+
+
+def _flat_index(d):
+    """目录 d 里的**文件**索引 {名字小写去扩展名: 绝对路径}；没有就 None。
+
+    一次 listdir 拿走全部 —— 这张 exFAT 卡一次冷目录读 6.8 ms（req277 基准），
+    逐文件 stat 是灾难。子目录一概不收：天马那种 media/<名>/ 交给
+    _pegasus_cover 管，两条路互不干扰（这里对 media/ 只会得到空索引）。
+    """
+    c = _FLAT_CACHE.get(d)
+    if c is not None:
+        return c if c else None
+    if len(_FLAT_CACHE) >= _FLAT_CACHE_MAX:
+        _FLAT_CACHE.clear()
+    try:
+        names = os.listdir(d)
+    except OSError:
+        _FLAT_CACHE[d] = False
+        return None
+    idx = {}
+    for n in names:
+        if n.startswith("."):
+            continue
+        stem, ext = os.path.splitext(n)
+        if not stem or ext.lower() not in FLAT_COVER_EXT:
+            continue
+        idx.setdefault(stem.lower(), os.path.join(d, n))
+    _FLAT_CACHE[d] = idx
+    return idx or None
+
+
+def _flat_cover(base, stem):
+    """在 base 下几个惯例封面目录里找 `<stem>.<ext>`（同名不同后缀）。
+
+    扩展名/目录名都按候选表挨个试，第一个存在的赢。目录级缓存，整轮索引只扫一次。
+    """
+    if not base or not stem:
+        return ""
+    low = stem.lower()
+    for sub in FLAT_COVER_SUBDIRS:
+        idx = _flat_index(os.path.join(base, sub))
+        if not idx:
+            continue
+        p = idx.get(low)
+        if p:
+            return p
+    return ""
+
+
 def _guess_cover(plat_dir, rel):
-    """最后的兜底：**只拿 ROM 文件名**，去它同级的 media/ 里找封面。
+    """最后的兜底：**只拿 ROM 文件名**去找封面，四条路依次试。
+
+    ① 老路：ROM 同级的 `media/<名>/boxFront.*`（天马卡，一游戏一目录）；
+    ② 新路：ROM 同级的扁平封面目录 `images/<名>.png`（2026-09-17 加）；
+    ③ 新路：**平台根**的扁平封面目录 —— ROM 分在 `01-动作游戏/` 这种子目录里、
+           封面却平铺在 `<平台>/images/` 下，这时同级是找不到的；
+    ④ 新路：**上一级**的扁平封面目录 —— 包把 ROM 和封面拆成并列两层
+           （`<包>/roms/xxx.zip` + `<包>/images/xxx.png`）时只有这条路能命中。
 
     rel 形如 `FBNEO ACT hack/kov2.zip`（相对 compat 平台目录），所以 media
     在 `<compat>/ARCADE/FBNEO ACT hack/media/`；FC 那种扁平平台没子目录，
     直接就在平台目录下找。
-    这条专治"元数据里根本没这个文件"的孤儿 ROM —— 天马卡上一大批
-    （metadata 写 kov2pemp.zip、卡上放 kov2.zip），一条记录都对不上，
-    全靠文件名 + 前缀兜底救回来。
     """
     rel = (rel or "").replace("\\", "/")
     sub = os.path.dirname(rel)
@@ -1355,7 +1778,26 @@ def _guess_cover(plat_dir, rel):
     stem = os.path.splitext(os.path.basename(rel))[0]
     if not stem:
         return ""
-    return _pegasus_cover(root, "", stem)
+    p = _pegasus_cover(root, "", stem)
+    if p:
+        return p
+    p = _flat_cover(root, stem)
+    if p:
+        return p
+    if sub:
+        p = _flat_cover(plat_dir, stem)
+        if p:
+            return p
+        # ④ 有些包把 ROM 和封面拆成并列的两层：`<包>/roms/xxx.zip` + `<包>/images/xxx.png`
+        #    （或者 rom/ 与 images/、games/ 与 covers/ 之类）。这时"同级"和
+        #    "平台根"都找不到，得看**上一级**。sub 只有一层时上一级就是平台根，
+        #    上面刚查过，跳过。
+        parent = os.path.dirname(root)
+        if parent and parent != plat_dir:
+            p = _flat_cover(parent, stem)
+            if p:
+                return p
+    return ""
 
 
 def _parse_pegasus_text(text, root, rel_root):
@@ -1719,7 +2161,73 @@ def prescan(compat_dir, resolved, systems=None):
 INDEX_DEFAULT = "/opt/vagaretro/index.tsv"
 # v4 = P 行后面多一条 C 行（每平台能换哪些核心）。纯粹是给"更换模拟器核心"
 # 用的；旧的 V 行号没有任何地方校验过，改成 4 只是留个追溯的记号。
-INDEX_VERSION = "4"
+INDEX_VERSION = "5"
+
+
+# v5 = G 行末尾多一列「标题的拼音首字母」，只给「搜索游戏」用。
+# 起因（2026-09-17 浪总实测）：搜索里输 HDL 搜不到魂斗罗 —— 前端原先只做
+# 字面子串匹配，而占位文案写的是「输入首字母或关键词开始搜索」，承诺没兑现。
+#
+# 表 = GB2312 常用字 6763 个的拼音**声母**，由 pypinyin 离线生成后固化在此
+# （设备上没装 pypinyin，搜索这种基础功能不该为它多背一份依赖）。
+# 多音字取 pypinyin 给的第一个读音 —— 对首字母检索够用（"重"取 z 不取 c，
+# 但「重装机兵」输 zzjb 命中，输 czjb 的用户极少）。
+PY_GROUPS = PY_GROUPS = {
+    "a": "俺傲凹哀哎唉啊嗄嗌嗳嗷坳埃埯奥媪嫒安岙岸庵廒懊拗按挨捱揞敖昂暗暧案桉氨澳熬爱犴獒瑷癌皑盎矮砹碍翱聱肮胺艾蔼螯袄谙遨鏊鏖铵锕锿阿隘霭鞍骜鳌鹌黯",
+    "b": "不丙亳伯伴佰便保俾倍傍傧八兵冫冰别剥办勃勹包匕北匾半卑博卜卞卟变叭吡吧呗哔哺啵嘣坂坌坝埠堡壁备奔妣婊婢嬖孛孢宝宾岜崩巴币布帛帮并庇庳弁弊弼彪彬彼必忭怖悖悲惫愎憋扁扒扮扳把报抱拌拔拜拨捌捕捭掰搏搬摆摈摒播擘敝斌斑晡暴本杓杯板柄柏标梆棒榜槟檗步殡比毕毖毙汴波泵浜渤滗滨濒濞灞灬炳焙煲煸爆爸版狈狴玢玻班璧瓣瓿甏甭畀畚疤病痹瘢瘪瘭癍白百砭碑碚碥碧磅礴禀秉秕稗窆笆笔笨笾筚箅箔篦簸簿粑绊绑绷缏编缤罢耙背胞脖膀膊膑膘臂舨般舭舶芭苄苞苯茇荜荸菝菠萆葆蒡蓓蓖蔽薄薜蚌蝙补表被裨裱褊褒褓褙襞谤豳豹贝败贬贲趵跋跛跸踣蹦蹩辈辨辩辫边迸逋逼遍避邦邴邶部鄙醭鐾钚钡钣钯钵钸钹铂铋锛镑镔镖镳闭阪陂陛雹霸靶鞭鞴颁飑飙飚饱饼饽驳骠髀髌髟鬓魃鲅鲍鳊鳔鳖鸨鹁鹎鼻龅",
+    "c": "丑丛丞串乘亍产仇从仓传伥伧伺侈侧侪促俦倡偿储催傺充冁册冲凑出刍创初刺匆厂厕厝厨参叉叱吃吵吹呈呲哧唇唱啐啜啻喘嗔嗤嘈嘬嘲噌嚓囱场坻坼垂城埕塍墀处姹娼婵媸嫦存孱宠宸察寸尘尝尺层屮岑岔崇崔嵯巛川巢差帱常幢床廛弛彩彳彻徂徜忏忖忡忱怅怆怊怵恻悴惆惝惨惩惭愁慈憧憷成戳才扯承抄抻抽拆持挫捶掣措掺插揣搀搋搐搓搽摧撑撤撮撺操擦敕敞斥昌春昶晁晟晨曹曾朝杈材村杵枞枨查柴柽棰椎椽椿楚楮榇榱槌槎槽樗橙橱檫次此殂残毳氅氚汆汊池沉沧测涔淙淬淳滁漕潮潺澄澈澶灿炊炒炽焯爨猖猜猝猹琛琮璀璁璨瓷畅畜畴疮疵痤痴瘁瘛瘥瘳皴眵睬瞅瞠矗矬砗础碜碴磁磋礤祠禅秤称程稠穿窗窜笞策筹篡篪簇粗粲粹糍糙纯绌绰绸缠羼翅翠耖耻聪肠脆脞腠膪臣臭舂舛舡舱船艚艟艹苁苌苍茈茌茨茬茶茺草莼菖菜萃葱蒇蔟蔡藏虫虿蚕蚩蛏蜍蝉蝽螬螭蟾蠢衩衬裁裎褚褫觇触词诚诧谄谌谗谶豺财赐赤趁超踌踔踟踩踹蹉蹙蹭蹰蹴蹿躇躔车辍辏辞辰辶迟逞遄郴酢酬酲醇醋采钏钗钞铖铲铳锄锉错锤锸镡镩镲闯阊阐陈除陲雌雏雠颤餐饬馇馋驰骋骖骢骣鬯魑鲳鸱鹑鹚鹾黜黪齿龀龊",
+    "d": "丁东丢丹仃代佃但低侗倒傣儋兑党兜典冬冻凋凳凼刀刁刂到剁动单叠叨叮叼吊吨呆呔咄咚哆哒哚啖啶喋嗒嗲嘀嘟噔囤地坫垌垛垤垫埭堆堕堞堤堵墩多大夺奠妒妲娣嫡宕定对导岛岱岽峒嶝巅帝带底店度弟弹当待得德忉怛怠怼恫悼惦惮惰憝懂戥戴打抖抵担挡捣掂掇掉掸揲搭敌敦斗断旦朵杜柁柢栋档棣椟椴歹殆殚段殿毒氐氘氡氮沌沓洞涤淀淡渎渡滇滴澹灯炖点焘煅爹牍牒犊狄独玎玳玷瓞甙电甸疔疸痘瘅瘩癜癫登的盗盯盹盾眈睇督睹瞪短砀砘砥硐碇碉碓碘碟碡碲磴礅祷稻窦端笃笛笪第等答箪篼簖簟簦籴纛绐缍缎缔羝翟耋耵耷耽聃肚胆胨胴腚舵芏荡荻菪萏董蒂蔸蚪蛋蝶蠹袋裆裰褡觌订诋诞读调谍谛谠豆貂贷赌赕趸跌跺踮踱蹀蹈蹬蹲躲达迨迪迭递逗逮遁道邓邸郸都酊钉钓钝钿铎铛铞铤铥铫锝锭锻镀镝镦镫队阽陡雕靛靼鞑顶顿颠骀骶髑鲷鲽鸫黛黩鼎",
+    "e": "二佴俄儿厄呃噩垩娥婀尔屙峨恩恶愕扼摁洱珥而耳腭苊莪萼蒽蛾讹诶谔贰轭迩遏鄂铒锇锷阏颚额饵饿鲕鳄鸸鹅鹗",
+    "f": "丰乏付份仿伏伐佛俘俯俸偾傅冯凡凤凫分副匐匚匪反发吠否吩呋咐唪啡坊坟垡复夫奉奋妃妇妨孚孵富封峰帆幅幞幡府废弗忿怫悱愤房扉扶抚拂拊放敷斐斧方服枋枫桴梵棼榧樊氛氟汾沣沸法泛浮涪淝滏瀵烦烽焚燔父犯狒珐甫畈番疯痱矾砜砝砩祓福稃符筏篚粉粪繁纷纺绂绋绯缚缝缶罘罚翡翻肤肥肪肺腐腑腓腹舫艴芙芬芳芾苻范茯莩菔菲葑蕃藩蘩蚨蜂蜉蜚蝠蝮袱覆讣讽访诽负贩费赋赙赴趺跗蹯辅辐返逢邡郛酆酚釜钒钫锋镄阀阜阝防附霏非风飞饭馥驸鲂鲋鲱鲼鳆麸黻黼鼢",
+    "g": "丐丨个乖亘仡估伽佝供倌傀光公共关冈冠刚刮刽刿剐割功勾匦卦古各告呙呱呷咕咣咯哏哥哽哿嗝嘎嘏噶固国圪圭坩垓垢埂埚塥够妫姑媾孤宄官宫寡尕尜尬尴岗岣崞崮工巩帼干广庋庚廾弓彀归怪恭惯感戆戈戤拐拱挂掴掼搁搞搿擀改攻故敢旮旰晷更杆杠杲构果枸柑柜栝根格桂桄桧梏梗棍棺椁概槁槔橄歌毂汞汩沟沽泔涫淦港溉滚澉灌炔牯牿犷狗猓珙瑰瓜甘疙疳痼癸皈皋盖盥睾瞽矸硅硌磙秆稿竿笱筻箍管篙篝簋糕纥纲绀给绠绲缑缟缸罐罟罡羔羹耕耿聒肛肝股肱胍胱胳膈膏臌舸艮苟苷茛莞菇菰葛藁虢虼蚣蛄蛊蜾蝈衮袼裹褂观规觏觚觥诂诖诟诡该诰谷贡购贯贵赅赓赣赶跟跪躬轨轱辊辜过逛遘郜郭酐酤钆钙钢钩钴铬锅锆锢镉镐闺阁陔隔雇革鞲顾馆馘骨骼高鬲鬼鲑鲠鲧鲴鳏鳜鸪鸹鸽鹄鹘鹳鼓龚龟",
+    "h": "乎互亥亨伙会何侯候冱凰函划劐劾化卉华厚号合后含吼呵呼和咴哄哈哕哗哼唤唬唿喉喊喙喝嗥嗨嗬嘿嚆嚎嚯回囫圜坏堠壑壕壶夥夯奂好婚孩宏宦害寒寰岵幌幻弘弧彗很徊後徨徽忽怀怙恍恒恚恢恨悍悔患惑惚惠惶慌慧憨憾或户戽扈护挥捍换撖撼擐攉斛旱昊昏晃晖晗晦曷杭核桁桓桦槐槲横欢毁毫氦汇汉汗沆沪河泓洄洪洹活浍浑浒浣浩海涣涵涸淮混湖湟溷滑滹漶潢濠瀚灏火灰烀烘烩焊焓焕煌煳狐狠猢猴猾獾环珩珲琥瑚璜瓠画痕痪瘊癀皇皓盍盒砉磺祜祸禾秽笏篁篌簧糇糊红绗绘缋缓缳罕翮翰耗耠肓胡胲航花茴荒荟荤荭荷获菏菡萑葫蒿蕙蕻薅薨藿蘅虍虎虹虺蚝蚵蚶蛔蛤蝗蝴蟥蟪蠖衡褐觳訇讧讳诃诙话诨诲谎豁豢豪貉货贺贿赫踝轰轷辉还逅逭遑邗邯郇郝酣醐醢钬铧铪锪锾镬闳阂阍阖阚隍隳霍韩顸颃颌颔颢馄骅骇骸骺鬟魂鲎鲩鳇鸿鹕鹤鹱麾黄黉黑鼾",
+    "j": "丌举久九乩井亟交京仅今介件价伎佳佶佼侥俊俭俱倔借倦倨假偈健僦僬僭僵儆兢具兼冀冂军决净减几击刭剂剑剞剧剪剿劂加劫劲匠卩即卷卺厥厩及句叫叽吉君咀咎咭哜唧啾喈嗟嘉噍噘噤噱嚼囝圾均坚基堇境墼夹奖奸妓妗姐姜姣姬娇娟婕婧嫁嫉孑孓季家寂寄将尖就尽局居届屐屦岌岬峤峻崛嵇嵴巨己巾廑建弪彐径徼忌急恝悸惊惧憬戋戒戛戟戢截戬扃技抉拒拘拣拮挢挤捃捐捡据捷掎掘接掬揪揭搅搛撅攫救教敫敬斤旌既旧晋景晶暨机杰极枧架枷柩柬桀桊桔桕桨桷检棘椐椒楗楫榉榘槿橘橛歼殛毽江汲沮泾洁洎洚津浃浆浇济浚浸涓涧渐湔湫溅激灸炅炬炯烬焦煎爝爵牮犄犋犍犟狙狡狷獍獗玑玖珈珏琚瑾甲界畸畿疆疖疚疥疽疾痂痉瘕瘠皆皎皲监眷睑睛睫矍矜矩矫矶硷碣碱礁礓祭禁积秸稷稼稽究窖窘窭竞竟竣竭笄笈笕笳笺筋简箕箭籍粳精糨紧纠级纪经结绛绝绞绢继绩缄缉缙缣缰缴羁羯翦耩聚肌肩肼胛胫胶脊脚腈腱臼舅舰艰艽节芥芨芰苣苴茄茎茧茭茳荆荐荚荠荩莒菁菅菊菌菹葭蒋蒹蒺蓟蕉蕨蕺藉虮蚧蛟蛱蠲街衿袈袷裥裾襟见觉觊觐角觖解謇警计讥讦记讲讵诀诘诫谏谨谫谲豇贱贾赆赍赳趄趼跏距跤践跻跽踞踺踽蹇蹶轿较辑近进迥迦迳迹遽郊郏郡鄄酒酱酵醮醵金鉴钅钜钧钾铗铰锏锔锦锩键锯镌镓镜镢间阄阱阶际降隽集雎霁靓靖静靳鞠鞫鞯韭颈颉颊飓饥饯饺馑驹驾骄骏骥骱髻鬏鲒鲚鲛鲣鲫鲸鸠鸡鹃鹣鹪鹫麂麇齑龃",
+    "k": "亏亢伉佧侃侉侩倥克况凯刊刳刻剀勘匡匮卡口叩可吭咔咖咳哐哙哭啃喀喟喹喾嗑困圹坎坑块坤坷垦垮垲堀堪壳夔夸夼奎孔客宽寇尻岢岿崆库康廓开快忾恐恪恳恺悃悝愦愧慨慷戡扛扣扩抗抠括拷挎捆控揆揩旷昆暌枯柯栲框棵楷槛款氪渴溃溘炕烤犒狂狯珂琨疴盔看眍眶睽瞌瞰矿砍磕科稞空窟窠窥筐筘筷箜篑糠纩绔缂考聩肯胩胯脍芤苛苦莰葵蒈蒉蒯蔻蛞蝌蝰裉裤诓诳课贶跨跬轲逵邝郐酷醌钪钶铐铠铿锎锞锟锴闶阃阔隗靠颏颗馈馗骒骷髁髋髡魁鲲龈龛",
+    "l": "两临丽乐乱了亮仂仑令伦伶佬例侣俐俚俩俪倮偻傈僚儡六兰冷冽凉凌凛列刘利剌力劣励劳勒卢卤卵历厉厘另叻吏吕吝呖呤咙咧哩唠唳啉啦啷喇喱喽嘞嘹噜囵囹坜垃垄垅垆垒埒塄墚奁姥娄娈娌婪嫘嫠孪寥寮尥屡履岚岭峦崂崃嵝嶙帘庐廉廊廖廪录律徕怜恋愣懒懔戮戾抡拉拎拢拦挛捋捞捩掠掳揽搂摞撂撩撸擂敛斓料旅旒旯晾朗李来林枥柃柳栊栌栎栏栗栳栾梁梨棂棱椋椤楝楞楼榄榈榔榴橹檑檩殓氇氯沥沦泐泠泪泷泸泺洌洛流浏浪涝涞涟淋渌溜溧滤滥滦漉漏漓漤漯潋潞潦澜澧濂濑灵炉炼烂烈烙熘燎牢犁狸狼猁猎猡獠率玲珑珞琅理琉琏琳璃璐瓴留略疗疠疬痢痨瘌瘘瘤瘰癃癞睐瞵砬砺砻砾硫碌磊磷礼禄离稂稆窿立笠笼箩篓篥篮篱簏籁类粒粝粮粱粼累纶练络绫绺绿缆缕缡缧缭罗罱罹羚羸翎老耒耢耧聆聊聋联肋胧胪脔脶脸腊膂膦臁舻良芦苈苓茏荔荦莅莉莨莱莲菱萝落蒌蒗蓝蓠蓼蔹蔺蕾藜虏虑蛉蛎蜊蜡蝼螂螺蠃蠊蠡裂裢裣裸褛褴览詈论诔谅谰赁赂赉赖趔跞路踉躏躐轮轳轹辂辆辘辚辣辽连逦逯逻遛遴邋邻郎郦酃酪酹醪醴里量銮鎏钌铃铑铝铹铼链锂锊锍锒锣镂镏镙镣镥镧镭镰闾阆阑陆陇陋陵隆隶雒雳零雷霖露颅领馏驴骆骊骝骡髅鬣魉鲁鲈鲡鲢鲤鲮鳓鳞鳢鸬鸾鹂鹨鹩鹭鹿麓麟黎黧龄龙",
+    "m": "么乜买亩仫们侔免冒冕冖冥劢勉勐募卖卯名吗命咩咪哞唛喵嘛嘧坶埋墁墓墨妈妙妹姆娩媒媚嫫嬷孟宀宓密寐寞岷峁嵋帽幂幔幕庙弥弭忙悯愍慕慢懋懑懵扪抹抿拇描摩摸摹敉敏旄明昧昴暝暮曼朦木末杩杪枚某梅梦棉楣模檬殁母每毛毪民氓汨沐沔没沫泌泖泯浼淼渑渺湄湎溟满漠漫漭灭焖煤熳牟牡牦牧犸猕猛猫猸玛玫珉瑁甍瘼皿盟目盲眄眇眉眠眯眸睦瞀瞄瞑瞒瞢矛码硭磨礞祢秒秘秣穆篾米糜糸縻绵缅缈缗缦缪美耄耱脉脒腼膜艋艨芈芒苗苜苠茂茅茆茉茗茫荬莓莫莽萌蒙蓦蔑蔓藐蘑蘼虻蚂蛑蛮蜜蜢蝥螟螨蟆蟊蟒蠓蠛袂袤觅谋谜谟谧谩谬貊貌貘贸迈迷邈邙酩酶醚鍪钔钼铆铭锚锰镁镅镆镘门闵闷闽陌霉霾靡面鞔颟馍馒马骂髦魅魔鳗鳘鸣鹋鹛麋麦麻麽默黾",
+    "n": "乃伲佞你侬倪傩内农凝努匿南呐呢呶咛哝哪啮喃喏嗫嗯囊囔囡坭垴埝奈女奴奶妞妮娘娜嫩嬲孥孬孽宁尼尿年廿弄弩念忸怒怩恁恧恼您懦扭拈拟拧拿挠挪捏捺捻搦撵攮旎昵暖曩柠柰楠氖泞泥浓涅淖溺牛狃狞猊猱瑙甯男疒疟睨硇碾糯纳纽耐耨聂聍肭胬能脑脓脲腩腻臬艿茑萘蔫蘖虐蛲蝻衄衲袅讷诺赧蹑辇辗逆那酿钕钠钮铌铙锘镊镍镎闹陧难霓颞馁馕驽鲇鲵鲶鸟黏鼐",
+    "o": "偶呕哦喔噢怄欧殴沤瓯耦藕讴鸥",
+    "p": "丕丿乒乓仆仳佩俜俳偏僻凭判刨剖剽劈匍匏匹叛叵呸咆品哌啤啪喷嘌嘭噗噼圃圮坡坪坯埔埤培堋姘娉婆媲嫔嫖屁屏帔帕平庀庖庞彭彷徘怕怦扑批抛抨披拍拚拼捧掊排撇擗攀攴攵旁旆普曝朋朴杷枇枰棚榀殍毗氆氕沛泊泡泮泼派浦淠湃湓溥滂漂潘澎濮瀑炮烹爬爿片牌牝犏狍珀琵琶璞瓢瓶甓畔疋疱疲痞癖皤皮盆盘盼睥瞟瞥砒砰破硼碰磐票笸筢篇篷粕纰缥罴翩耪聘胖胚胼脬脯脾膨芘苤苹莆菩萍葡葩蒎蒲蓬蚍蜱螃螵蟛蟠袍袢裒裴襻譬评谝谱貔贫赔趴跑蹁蹒蹼辔辟迫逄邳郫鄱配醅钋钷铍铺锫镤镨陪陴霈霹颇频颦飘骈骗魄鲆鹏鼙",
+    "q": "七且丘丬乔乞乾亓亲仟企佥侨侵俅俏俟倩倾全其凄凵切券前劁劝劬勤区千却卿去取吣启呛嗪嘁噙器囚圈圊圻堑墙奇契妻妾娶嫱寝屈屺岂岍岐岖峭崎嵌巧巯庆弃强怯恰悄悛悫悭情惬愀愆慊憔憩戕戗戚扦抢拳挈掐掮揿搴撬擎擒敲旗晴曲朐期权杞枪柒栖桤桥棋椠楸榷槭樯樵橇檎檠欠欺歉歧氍气氢氰求汔汽沁沏泅泉泣洽浅淇清渠溱漆潜炝牵犬犭犰球琦琪琴琼璩畎畦痊瘸癯瞧瞿砌硗确碛磬磲祁祈祛祺禽秋秦穷穹窃窍筇筌签箐箝箧糗綦綮绮绻缱缲缺罄羌羟群翘耆肷脐腔芊芎芑芡芩芪芹苘茕茜荃荞萁萋葜葺蔷蕖蕲蘧虔虬蚯蛆蛐蛩蛴蜞蜣蜷蜻蝤螓蠼衢衾裘裙褰襁觑謦讫诎诠诮请谦谯谴赇起趋趣跄跫跷蹊躯轻辁迁迄逑逡遒遣邛邱郄酋醛銎钎钤钦钱钳铅铨锓锖锲锵锹镪阒阕阙阡雀青鞒鞘顷颀颧驱骐骑骞髂鬈鲭鳅鳍鸲鹊麒麴黔黢黥鼽齐龋",
+    "r": "乳人亻仁仍仞任偌儒入冉冗刃嚅嚷壤壬如妊娆孺容嵘弱忍惹戎扔扰揉攘日朊枘染柔桡榕汝洳润溶溽濡热然熔燃狨瑞瓤睿禳稔穰箬糅纫绒绕缛肉肜芮苒若茸茹荏荛荣葚蓉蓐蕊蕤薷蚋蚺蝾融蠕衽褥襦认让蹂轫软辱铷锐闰阮鞣韧颥饪饶髯",
+    "s": "三上世丝丧书事什仕仨伞伤伸似佘使侍俗倏傻僧僳兕兽凇删刷刹剡剩劭势勺匙十卅升厍厦厮厶叁双叔受叟史司吮呻咝哂哨唆唢售唰唼商啥啬善嗉嗍嗓嗖嗜嗣嗦嗽嗾嘶噬噻四圣垧埏埘埽塑塞塾墅墒士声夙失奢妁始姒姗姝娑娠婶嫂嬗孀孙孰守宋实审室宿寺寿射少尚尸屎属山岁崧嵊嵩巳市帅师庶式弑彡忪怂思恃恕悚愫慎慑戍所扇手扌扫抒拭拴拾挲捎损授搔搜搠搡摄摅摔撒撕擅擞收散数斯施时是晌晒暑曙朔术杀杉束松枢柿树栓桑桫梢梭梳森椹榫槊歃歙死殇殊殳毵毹氏水氵汕汜沈沙沭泗洒涉涑涩涮淑淞深渖渗湿溯溲滠漱潲潸澌澍濉炻烁烧煞煽熟熵燧爽牲狩狮狲狻猞珊琐瑟甚生甥甩申畲疏疝痧瘙瘦盛省眚眭睃睡睢瞍瞬矢矧石砂砷硕碎磉示礻社祀神祟私秫稍税稣穑穗竖竦笋笙笥筛筮筲算簌粟糁素索纟纱纾绅绍绥绱绳绶缌缩缫缮署羧耍耜耸肃肆肾胂胜脎腧腮膳膻臊舌舍舐舒舜舢艄艏艘色芍芟苏苕苫荪荽莎莘莳菘菽萨蒜蒴蓍蓑蔌蔬薮薯虱虽蚀蛇蛳蛸蜀蜃螋螫蟀蟮衫衰裟裳视觞觫誓讪讼设识诉试诗诜说诵谁谂谇谡谥豉豕贳赊赎赏赛赡赦跚身轼输述送适逝速遂邃邵鄯酥酸酾释钐铄铈铩铯锁锶锼闩闪陕隋随隧隼霎霜韶顺颂颡飒飕食飧饣饰饲馊馓首驶驷骚骟髓鲥鲨鲺鳃鳋鳝鸶麝黍鼠",
+    "t": "乇亠亭他仝体佗佟佻倘倜停偷傥僮兔凸剃剔厅台叹同吐吞听唐唾啕啼嗵嚏团图土坍坛坦坨堂堍塌塔塘填天太头套她妥婷它屉屠屯帑帖庭庹廷彖彤徒忐忑忒忝态恬恸悌惕慝托投抟抬拓拖挑挞挺捅掏探推掭提搪摊昙暾替条柝桃桐桶梃梯棠椭榻樘橐檀殄毯氽汀汤汰沱沲泰洮涂涕涛淌淘添湍溏溻滔滕滩潭潼炭炱烃烫煺特獭瑭甜田町畋疃疼痛痰瘫眺瞳砣砼碳祧秃突窕童笤筒箨粜糖统绦绨缇羰耥肽胎脱腆腾腿膛臀舔艇苔茼荑荼莛菟萄萜葶薹藤蜓蜕蜩螗螳袒裼褪覃誊讨谈谭豚贪贴趟趿跆跎跳踏踢蹄蹋躺迢退逃透途逖通遢邰郯酞酡酮酴醍醣钍钛钭钽铁铊铜铴铽锑锬镗闼阗陀陶霆韬颓题餮饕饧饨驮驼骰髫鲐鲦鳎鸵鹈鼍鼗龆",
+    "w": "万丸为乌五亡仵伍伟伪位佤侮倭偎兀刎剜务勿午卧卫危吴吻吾呒呜味哇唔唯喂嗡囗围圩圬坞外妄妩委威娃娓娲婉婺完宛寤尉尾屋崴嵬巍巫帏帷幄庑弯往微忘忤怃悟惋惘惟慰戊我挖挝挽捂握文斡无旺晚晤望未杌枉桅梧武歪毋污汪汶沃沩洧洼浯涠涡渥温渭湾潍炜烷焐煨物牾猥猬王玟玩玮琬璺瓦瓮畏畹痦痿瘟皖硪碗稳窝紊纨纬纹维绾网罔翁肟胃脘腕腽舞艉芄芜芴苇莴菀萎葳蓊蔚蕹薇蚊蛙蜈蜗蜿袜诬误诿谓豌軎辋迕违逶邬鋈钨问闱闻阌阢隈雯雾韦韪顽骛魍魏鲔鹉鹜鼯龌",
+    "x": "下习乡些享亵仙休侠信修偕像僖儇兄先兮兴写冼凶刑削勋勖勰匈匣协卸厢县叙吁向吓吸咸咻响哓哮唏啸喜喧嗅嘘嘻嚣囟型埙墟夏夕奚姓娴婿媳嫌嬉孝学宣宪宵寻小屑屣岘岫峋峡崤巡巷巽希席幸序庠庥廨弦形徇徐徙循心忄忻性恂恤息悉悬悻惜想惺懈戌戏挟掀揎携撷擤效斜新旋旬旭昔昕星显晓晰暄暇暹曛曦朽杏析枭枵柙校栩械楔楦榍榭樨橡檄欣欷歆歇殉氙汐汛汹泄泫泶泻洗洫洵浔浠消涎淅淆渫渲湘溆溪溴漩潇瀣炫烯煊煦熄熊熏熙熹燮燹牺犀狎狭猃猩献獬獯玄现玺瑕璇痃痫癣皙盱相眩瞎矽硎硒硖硝碹祆祥禊禧秀稀穴穸窨笑筅筱箫箱籼粞糈系絮纤线绁细绚绡绣绪续缃缬罅羞羡羲翔翕肖胁胥胸腥腺膝舄舷舾芗芯苋荀荇荥荨莶菥萧萱葙葸蓄蓰蓿蕈薛薤薪薰藓虚虾蚬蜥蝎螅蟋蟓蟹血衅行衔袖袭襄西觋训讯许询详诩谐谑谖谢象貅贤跣跹踅躞轩辖辛迅选逊逍遐邂邢邪郗酗酰醑醒醯醺鑫铉铣销锈锌锡锨镟镶闲阋陉限险陷隙隰雄雪需霄霞霰靴鞋项须顼飨饩饷馅馐香馨驯骁骧髹魈鲜鲞鲟鳕鸺鹇黠鼷",
+    "y": "一与业严丫义乙也予于云亚亦亿以仪仰伊优伛伢佑余佚佣佯佾侑依俑俞俣俨倚偃允元兖养冤冶刈刖劓勇匀医卣印压厌原厣又友右叶吆吖吟吲呀呓员呦咏咦咬咽咿哑哟唁唷喁喑喻嘤噎噫因园囿圄圆圉圯垠垣垭垸域埸堙堰塬墉壅壹夜夤夭央夷奄奕妍妖妤妪姚姨姻娅娱婴媛媵嫣嬴孕宇宜宥宴寅寓尢尤尧尹屹屿岈岩岳峄峪崖崦崾嵛嶷已幺幼幽应庸庾廴延异弈弋引彝彦影役徉御徭忆忧怏怡怨怿恙恹恽恿悒悠悦愈愉意愚愠愿慵懿扬抑押拥挹掖掩掾揄揖揠援揶摇撄攸於旖昀易映昱晏晔晕曜曰曳月有杨杳柚样桠椅椰楹榆樱樾橼檐欤欲欹殃殒殪殷毅毓氤氧氩氲永沂沅油沿泱泳洇洋浴涌涯液淤淫淹渊渔渝游湮源溢滟滢演漪漾潆瀛瀹炀炎烊烟烨焉焰焱煜熠熨燕燠爰爷爻牖牙犹狁狱狳狺猗猷猿玉珧琊琰瑗瑛瑜瑶璎用甬由疑疡疣疫痈痍痒痖瘀瘐瘗瘾瘿癔盂盈益盐眙眢眼睚矣砑研砚硬禹禺秧移窈窑窬窳竽筠筵箢粤繇纡约纭绎缘缢缨罂罨羊羽羿翊翌翳翼耀耘耶聿肀肄育肴胤胭胰腋腌腰腴膺臃臆臾舀舁舆舣艳艺芋芫芸芽苑苡英茔茚茵荧荫药莜莠莸莹莺菸萤营萦萸蓣蓥蕴薏虞蚁蚓蚜蚰蚴蛘蛹蜒蜮蜴蝇蝓蝣螈衍衙衣衤袁裔裕要觎言誉讠议讶译诒诣语诱谀谊谒谕谚谣谳豫贻赝赢越跃踊轧轶轺辕迂迎运迓远迤逸逾遇遗遥邀邑邕邮邺郁郓郢郧郾鄞鄢酉酏酝酽釉野钇钥钰钺铀铕铘铟铱银镒镛镱闫阅阈阉阎阳阴院陨隅隐雁雅雍雨雩霪靥鞅韫音韵页预颍颐颖颜餍饔饫饮饴馀驭驿验鬻魇鱼鱿鳐鳙鸢鸦鸭鸯鸳鹆鹞鹦鹬鹰黝黟鼋鼬鼹龉龠",
+    "z": "丈专中丶主之乍争仄仉仔仗仲众伫住佐作侄侏侦俎倬债值做偬兆兹再冢准凿则制助匝卒卓占卮只召吒吱周咂咋咒咤咨咫咱哉哲哳唑唣啁啄啧啭喳嘱嘴噪在圳址坐坠埴增壮夂奏奘妆妯姊姿嫜子字孜孳宅宗宙宰寨尊展峙峥崭崽嵫嶂州左帐帙帚帜帧帻幛庄座张彘彰征徵志忠忮怍怎怔总恣惴憎战扎执找抓折拄拙招择拯拶拽指挚挣振捉掌掷揍揸搌摘摭摺撙撞撰擢攒攥支政整斋斟斩斫旃族旨早昃昝昨昭昼智暂最朕札朱杂杖杼枕枝枣枳柘柞柱栀栅栈栉株栽桌桎桢桩梓棕棹植楂楱榛榨槠樟樽橥止正殖毡汁治沼沾注泽洙洲浈浊浙浞涨涿淄渍渚渣湛滋滓滞漳潴澡濯灶灼灾炙炷炸烛照煮燥爪状狰猪獐珍珠琢璋瓒甄甑甾畛疰疹痄症痔痣瘃瘴瘵皂皱盅盏直真眦眨着睁瞩瞻知砖砟砦砧砸磔祉祖祗祚祝祯禚种租秩秭稚稹窀窄窒站章竹竺笊笫笮筑筝箦箴箸篆簪籀籽粘粢粥粽糌糟紫絷纂纣纵纸组织终绉综绽缀缁缒缜缯缵罩罪置罾翥者耔职肇肘肢肫肿胀胄胗胙胝脂脏腙膣臧自至致臻舟舯舳舴芝芷苎茁茱荮著葬蒸蓁蔗蕞藻蘸蚤蚱蛀蛛蛭蛰蜇蜘螽蟑衷装褶觜觯訾詹证诅诈诊诌诏诛诤诸诹诼谆谘谪谮谵豸贞责账质贮贼贽赀赃资赈赘赚赜赞赠赭走赵趑趱足趾跖踪踬踯踵躁躅躜转轴轵轸载轾辄辎辙这迮追逐造遭遮遵邹邾郅郑鄣鄹酌酎酯醉重錾针钊钟钲钻铡铢铮铸锃锗锥锱锺镇镞镯长闸阵阻阼陟陬障隹雉震颛馔驵驺驻骓骘骤髭鬃鲰鲻鳟鸩鸷鹧麈黹齄龇",
+}
+
+_PY_MAP = None
+
+
+def _py_map():
+    """把 23 组声母展开成 汉字->声母 的字典（懒加载，只建一次）。"""
+    global _PY_MAP
+    if _PY_MAP is None:
+        m = {}
+        for k, s in PY_GROUPS.items():
+            for ch in s:
+                m[ch] = k
+        _PY_MAP = m
+    return _PY_MAP
+
+
+def pinyin_initials(title):
+    """标题 -> 拼音首字母串。汉字取声母；ASCII 字母/数字原样转小写保留；
+    其余（空格、标点、日文假名等）丢掉。
+
+    「魂斗罗3 力量」-> "hdl3ll"     「1943」-> "1943"
+    表外的生僻字会静默丢掉 —— 宁可少一个字母，也不要让整条游戏搜不到。
+    """
+    m = _py_map()
+    out = []
+    for ch in title:
+        if ch in m:
+            out.append(m[ch])
+        elif ch.isascii() and ch.isalnum():
+            out.append(ch.lower())
+    return "".join(out)
 
 
 def _tsv_clean(value):
@@ -1808,9 +2316,13 @@ def write_index(cfg, dirs, systems=None, out_path=None):
         for e in pentries:
             # 第 4 列 = gamelist.xml 的 <image> 绝对路径（没有就空串）。
             # 这是封面的**首选来源**，前端拿不到才退回按文件名猜。
-            lines.append("G\t%s\t%s\t%s" % (_tsv_clean(e["title"]),
-                                              _tsv_clean(e["name"]),
-                                              _tsv_clean(e.get("img", ""))))
+            # 第 5 列（索引 v5）= 标题的拼音首字母，只服务「搜索游戏」。
+            # 前端 search_run() 拿它跟字面标题一起做子串匹配，这样输
+            # "hdl" / "魂斗罗" / "contra" 都能搜到魂斗罗。
+            lines.append("G\t%s\t%s\t%s\t%s" % (_tsv_clean(e["title"]),
+                                                  _tsv_clean(e["name"]),
+                                                  _tsv_clean(e.get("img", "")),
+                                                  pinyin_initials(e["title"])))
             if e.get("img"):
                 n_gal += 1
             n_game += 1
@@ -1830,6 +2342,9 @@ def write_index(cfg, dirs, systems=None, out_path=None):
         fh.write("\n")
     os.replace(tmp, out_path)
 
+    log("封面探测：新探 %d 个目录（其中 %d 个退化成 listdir）/ 命中持久缓存 %d 条"
+        % (_BOX_STAT_N[0], _BOX_LSDIR_N[0], _LOADED_COVERS))
+    _save_cover_cache()
     log("索引已写出：%s（%d 平台 / %d 游戏 / %d 带封面 / "
         "%d 个平台带封面目录 / %d 个平台可换核心 / %d 个平台带游戏介绍 / %.0f KB）"
         % (out_path, n_plat, n_game, n_gal, n_img, n_core, n_desc,
@@ -2605,6 +3120,11 @@ def _fix_easyrpg_content(rom):
 #   用 custom viewport 还多一个好处：RA 会**保持核心原生比例**把画面缩放
 #   居中放进这个矩形 —— 既不变形，又正好落在窗口里，等于两头都满足。
 BEZELS_DIR     = "/opt/vagaretro/bezels"
+# ★ 遮罩/视口的逻辑画布尺寸（2026-09-18）。自造 960x720 那套的 PNG 是
+#   `overlay0_full_screen = true` 铺满画布，`custom_viewport_*` 也认这套坐标
+#   （实测：给 (20,20,400,300) 画面就出现在 (20,20) 400x300）。
+#   只用来做 `vp` 的合法性校验（越界就忽略），别把它当物理分辨率。
+BEZEL_CANVAS   = (960, 720)
 # ⚠ 这份文件现在装的是"启动期要覆盖的所有东西"：遮罩 + 退出自动存档。
 #   RA 只认**最后一个** --appendconfig，所以两者必须合并写进同一份，
 #   分两次注入后面那个会把前面整个顶掉（只能生效一个）。
@@ -2616,13 +3136,9 @@ VGCONF_DEFAULT = "/opt/vagaretro/vgfront.conf"
 # 2026-09-16 明确："针对平台生效 不用加到设置里面"）。
 AUTOSAVE_PATH  = "/opt/vagaretro/autosave.txt"
 
-# 存档位（每个游戏一套）：一行 `<pid>\t<rel>\t<加载位>`。
-# （老文件是四列、多一个「保存位」，读的时候按 ≥3 列处理、忽略第 4 段。）
-# 前端弹层的「加载存档」写它，这里读出来注入 state_slot。
-# 为什么只能"启动时生效"：前端是启动器，游戏跑起来之后它已经退出了，
-# 没法在游戏运行中替玩家读/存档 —— 只能把位号交给 RetroArch。
-# ⚠ 「保存存档」2026-09-16 已按用户要求去掉（原话："保存只能在 RA 完成"）。
-SLOTS_PATH     = "/opt/vagaretro/slots.txt"
+# ★ 2026-09-17：`SLOTS_PATH = "/opt/vagaretro/slots.txt"` 已删除 ——
+#   前端的「加载存档」弹层项按用户要求整体删掉了，那份文件不再有人生成。
+#   续档改由「退出自动存档」（平台级开关 + 下面 autosave_slot() 那个全局位号）承担。
 
 # 平台 id -> 遮罩包里的目录名（给候选列表，取第一个存在的）。
 # 同一台机在三套包里叫法不统一（红白机叫 famicom 也叫 nes，超任叫 sfc
@@ -2674,6 +3190,90 @@ def _bezel_windows():
     return out
 
 
+def _bezel_vp(base, plat):
+    """读自造遮罩包里的 `vp` 文件 -> (x, y, w, h)，没有/读坏就返回 None。
+
+    ★★ 这是「遮罩洞 == 游戏画面」的**唯一真源**（2026-09-18）。
+    生成器 pc/gen-bezels-960x720.py 用同一个 `core_rect()` 既挖 PNG 的透明洞、
+    又把同一个矩形写进这个 `vp`，所以下面这两个数天生相等：
+        PNG 里透明的那块  ==  custom_viewport 指定的那块
+    实测（req760）：vp=(20,20,400,300) 时画面精确出现在 (20,20) 400x300。
+
+    文件格式固定四行（生成器写死了换行符，这里按行读最稳）：
+        x
+        y
+        w
+        h
+    坐标系 = **960x720 逻辑画布**，跟 `overlay0_full_screen` 的 PNG 同一套。
+
+    ⚠ 不做缓存：文件 4 行不到 20 字节，而"改了遮罩包下一次启动立刻生效"
+      远比省这一次读盘重要（跟 load_core_overrides 同一个理由）。
+    ⚠ 任何一项不合法（负数 / 0 宽高 / 超出画布）都返回 None —— 宁可退回
+      core provided（画面占满但不变形），也绝不把坏数字喂给 RA。
+    """
+    try:
+        with open(os.path.join(base, plat, "vp"), "r",
+                  encoding="utf-8", errors="replace") as fh:
+            n = [int(t.strip()) for t in fh.read().split()[:4]]
+    except (OSError, ValueError):
+        return None
+    if len(n) != 4:
+        return None
+    x, y, w, h = n
+    if w <= 0 or h <= 0 or x < 0 or y < 0:
+        return None
+    if x + w > BEZEL_CANVAS[0] or y + h > BEZEL_CANVAS[1]:
+        log("遮罩 %s/%s 的 vp=%s 超出画布 %s，忽略" % (base, plat, n, BEZEL_CANVAS))
+        return None
+    return (x, y, w, h)
+
+
+def _bezel_vpo(base, plat):
+    """读遮罩包里的 `vpo` -> **RA custom_viewport 真正要写的那四个数** (dx, dy, w, h)。
+
+    ★★★ 2026-09-18 实测定案：`custom_viewport_x/y` 不是绝对坐标，而是**相对屏幕
+    中心的偏移**。RA 实际算出来的是：
+        rect.x = (画布宽 - w) // 2 + custom_viewport_x
+        rect.y = (画布高 - h) // 2 + custom_viewport_y
+
+    真机证据（FC / nestopia / 960x720，全部逐像素吻合，残差 <1px）：
+        index=22 + (99,14,762,668)   → 画面仍是 core provided 的 940x720，**完全没响应**
+        index=23 + (100,60,300,200)  → 画面落 (430,320) 291x193 = 居中(330,260)+偏移 ✓
+        index=23 + (99,14,762,668)   → 画面落 (198,40)  = 居中(99,26) +偏移 ✓
+        index=23 + (0,0,500,200)     → 画面落 (230,260) = 居中(230,260)+偏移(0,0) ✓
+    ⇒ 老包把**绝对坐标**写进 custom_viewport，等于往右下各推了半个屏幕，
+      画面自然被遮罩开窗压住 —— 这就是浪总报的"遮罩挡住游戏画面"的上游原因。
+
+    `vpo` 文件格式（生成器 pc/gen-bezels-final.py 写）：
+        dx
+        dy
+        w
+        h
+    dx/dy 允许为负（比如洞在画布上方时）。没有 `vpo` 的老包按同一个公式从 `vp`
+    现算一遍，于是老包也能被救回来（不必重推资产）。
+    """
+    p = os.path.join(base, plat, "vpo")
+    if os.path.isfile(p):
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                n = [int(t.strip()) for t in fh.read().split()[:4]]
+        except (OSError, ValueError):
+            n = []
+        if len(n) == 4:
+            dx, dy, w, h = n
+            # w/h 必须合法；dx/dy 允许负，但不能离谱（留 ±一个画布）
+            if w > 0 and h > 0 and w <= BEZEL_CANVAS[0] and h <= BEZEL_CANVAS[1] \
+                    and abs(dx) <= BEZEL_CANVAS[0] and abs(dy) <= BEZEL_CANVAS[1]:
+                return (dx, dy, w, h)
+            log("遮罩 %s/%s 的 vpo=%s 不合法，忽略" % (base, plat, n))
+
+    vp = _bezel_vp(base, plat)
+    if not vp:
+        return None
+    return (vp[0] - (BEZEL_CANVAS[0] - vp[2]) // 2,
+            vp[1] - (BEZEL_CANVAS[1] - vp[3]) // 2, vp[2], vp[3])
+
+
 def read_vgfront_conf(key, default=""):
     """从 vgfront 的设置文件里取一个键。
 
@@ -2719,8 +3319,30 @@ def autosave_on(pid):
     return False
 
 
+def autosave_slot():
+    """「退出自动存档」用第几个 state_slot。设置页「自动存档位」写进 vgfront.conf。
+
+    出厂 9（跟前端 vgfront.c 的 AUTOSLOT_DEF 对齐）—— 刻意跟玩家手动存档
+    常用的 0~5 位错开：自动存档**每次退出都覆盖**，撞上玩家手存的位就等于
+    把人家的进度盖掉了。
+    ⚠ 认不出的值（手工把 conf 写坏）一律回落到 9，别让脏值传到 RA 那边。
+    """
+    v = read_vgfront_conf("autosave_slot", "9").strip()
+    try:
+        n = int(v)
+    except ValueError:
+        return 9
+    return n if 0 <= n <= 10 else 9
+
+
 def autosave_lines(pid):
     """退出自动存档要写进 appendconfig 的行。没开就返回 []。
+
+    ★ 2026-09-17（用户：「退出自动保存存档功能  自动保存默认在状态槽9
+      设置里面可以修改状态槽0-10状态槽」）：位号不再跟着 RA 的 state_slot
+      （那是 0），而是显式写成设置页选的那一档。**存和读用同一个位号** ——
+      退出时 savestate_auto_save 存进第 N 位，下次启动 savestate_auto_load
+      从第 N 位读回来，于是进游戏直接续上。
 
     为什么要 savestate_auto_load：只开 auto_save 的话，退出时存了档但下次
     启动不会用 —— 用户要的是"接着玩"，所以两个一起开。
@@ -2729,70 +3351,32 @@ def autosave_lines(pid):
     """
     if not autosave_on(pid):
         return []
+    slot = autosave_slot()
     return [
         "# 退出自动存档（前端「启动游戏 → 退出自动存档」开的）",
+        'state_slot = "%d"' % slot,
         'savestate_auto_save = "true"',
         'savestate_auto_load = "true"',
     ]
 
 
-def slot_override_for(pid, rel):
-    """读 slots.txt 里这个游戏的**加载位**，没配过就是 0。
-
-    格式（前端弹层「加载存档」写的；2026-09-16 起是三列）：
-        <平台id>\t<游戏相对路径>\t<加载位>
-    位号 0..5，0 = 关闭。
-    ⚠ 老文件是四列（多一个「保存位」）。这里**只要求 ≥3 列、只认第 3 列**，
-     所以盘上已有的老数据不用迁移也读得出来。
-    ⚠ 「保存存档」2026-09-16 按用户要求从弹层去掉（原话："保存只能在 RA 完成"），
-     保存位不再存在；要"退出时自动存"请用「退出自动存档」那个平台级开关。
-
-    键的两个字段必须和前端 G 行、和 --launch 的 rel **逐字符相等** ——
-    差一个字就是"选了不生效"，所以这里不做任何规范化，直接字符串比。
-    """
-    if not pid or not rel:
-        return 0
-    try:
-        with open(SLOTS_PATH, "r", encoding="utf-8", errors="replace") as fh:
-            for ln in fh:
-                ln = ln.rstrip("\r\n")
-                if not ln or ln.startswith("#"):
-                    continue
-                f = ln.split("\t")
-                if len(f) < 3:
-                    continue
-                if f[0] != pid or f[1] != rel:
-                    continue
-                try:
-                    a = int(f[2])
-                except ValueError:
-                    return 0
-                return a if 0 <= a <= 5 else 0
-    except OSError:
-        pass
-    return 0
-
-
-def slot_lines(pid, rel):
-    """存档位要写进 appendconfig 的行。没配过就返回 []。
-
-    「加载存档」= 启动时把 state_slot 指到第 N 位 + savestate_auto_load，
-    进游戏由 RA 自己去读 —— 前端不是游戏现场，只能做到这一步。
-    （「保存存档」2026-09-16 已去掉，所以这里不再写 savestate_auto_save；
-     要"退出自动存"走「退出自动存档」的 autosave_lines()。）
-    """
-    load = slot_override_for(pid, rel)
-    if not load:
-        return []
-    return ["# 存档位（前端「启动游戏 → 加载存档」设的）",
-            'state_slot = "%d"' % load,
-            'savestate_auto_load = "true"']
-
+# ★ 2026-09-17：`slot_override_for()` / `slot_lines()` 已删除 ——
+#   「加载存档」弹层项按用户要求整体删掉，这两条是它的宿主侧。
+#   现在 state_slot 只由上面 autosave_lines() 按「自动存档位」写。
 
 def bezel_lines(pid, mode):
     """按平台凑遮罩 appendconfig 的行；该平台没遮罩就返回 []。
 
-    mode = 分辨率目录名（1024x768 / 640x480 / 720x720），空串 = 关闭遮罩。
+    mode = 分辨率目录名（960x720 / 1024x768 / …），空串 = 关闭遮罩。
+
+    ★★ 2026-09-18 浪总：「核心默认就全屏的游戏不需要遮罩啊」
+       原生比例 == 屏幕比例（都是 4:3）的平台 —— PS1 / MD / SFC / DC / N64 /
+       Saturn / ARCADE / DOS … —— 核心本来就把画面铺满 960x720；
+       硬挂遮罩只会把画面压成 890x668（**面积 -14.0%**）再套一圈边框。
+       这类平台在遮罩包里**只有一个 `vp`**（内容 = 满屏矩形 `0,0,960,720`），
+       **没有 default.cfg / default.png**。于是下面用「有 cfg 才挂 overlay」
+       区分：满屏平台只注入 custom_viewport，**一行 overlay 都不挂**。
+       真源仍是 `vp` 一个文件，跟需要遮罩的平台走同一套代码路径。
     """
     if not mode:
         return []
@@ -2801,32 +3385,354 @@ def bezel_lines(pid, mode):
         return []
     base = os.path.join(BEZELS_DIR, mode)
     plat = None
+    have_cfg = False
     for c in cands:
         if os.path.isfile(os.path.join(base, c, "default.cfg")):
+            plat, have_cfg = c, True
+            break
+        # ★ 只有 vp、没有 default.cfg = 「原生比例 == 屏幕比例」的满屏平台
+        if os.path.isfile(os.path.join(base, c, "vp")):
             plat = c
             break
     if not plat:
         return []                        # 这套包里没这个平台，安静跳过
 
-    lines = [
-        'input_overlay = "%s/%s/default.cfg"' % (base, plat),
-        'input_overlay_enable = "true"',
-        'input_overlay_opacity = "1.000000"',      # 用户要求：不透明度 100%
-        'input_overlay_hide_in_menu = "true"',
-    ]
-    win = _bezel_windows().get((mode, plat))
-    if win:
+    vp = _bezel_vp(base, plat)
+    # 洞 == 整个画布 ⇒ 等价于「没有边框」：挂着只是白跑一次合成，直接当没遮罩
+    full = bool(vp) and vp[0] == 0 and vp[1] == 0 and \
+        vp[2] >= BEZEL_CANVAS[0] and vp[3] >= BEZEL_CANVAS[1]
+
+    lines = []
+    if have_cfg and not full:
         lines += [
-            'aspect_ratio_index = "22"',           # 22 = custom（用下面这个视口）
-            'custom_viewport_x = "%d"' % win[0],
-            'custom_viewport_y = "%d"' % win[1],
-            'custom_viewport_width = "%d"' % win[2],
-            'custom_viewport_height = "%d"' % win[3],
+            'input_overlay = "%s/%s/default.cfg"' % (base, plat),
+            'input_overlay_enable = "true"',
+            'input_overlay_opacity = "1.000000"',  # 用户要求：不透明度 100%
+            'input_overlay_hide_in_menu = "true"',
         ]
+    # ===================================================================
+    # ★★ 2026-09-18 浪总：「RA 各机种视频比例改为核心比例 然后各平台遮罩适配好
+    #    别挡住游戏画面」+「你按照我们实际的这个游戏画面来做遮罩啊」
+    #    +「66的720P遮罩… 960*720 用这一套」
+    #
+    # 【第一版，已推翻】只写 aspect_ratio_index=21，指望 RA 按核心比例把画面
+    #   "最大内接居中"放进画布。**前提是错的**：core provided **不管我们要留标签带**，
+    #   实测 FC 被放到 (69,0) 822x720 —— 占满画布高度，而洞是 (99,15) 762x667
+    #   ⇒ 画面四周比洞多 30/15/30/53 px，全被不透明边框压住。
+    #
+    # 【第二版，已推翻】aspect_ratio_index=22 + custom_viewport = **绝对**洞矩形。
+    #   两个错叠在一起：① 22 **不是 Custom**，RA 完全无视 custom_viewport，
+    #   画面照旧按 core provided 铺成 940x720；② custom_viewport_x/y 也不是绝对
+    #   坐标而是**相对屏幕中心的偏移**。于是"洞 762x667 要装在画面 940x720 上"，
+    #   左右各被压掉 89 px —— 底部 HUD 最左那格血条(x39-70)和最右的 ×2 命数
+    #   (x913-949) 直接消失。
+    #
+    # 【第三版 = 现在这版，真机实拍验证通过】
+    #   ① `aspect_ratio_index = "23"` ← **23 才是 Custom**（22 实测 0 响应）
+    #   ② `custom_viewport_x/y` 写**偏移** dx/dy（读 `vpo` 文件）：
+    #          rect.x = (960 - w)//2 + dx ,  rect.y = (720 - h)//2 + dy
+    #      实测：index=23 + (100,60,300,200) → 画面 (430,320)；
+    #            index=23 + (99,14,762,668) → 画面 (198,40)，与"居中+偏移"逐像素吻合。
+    #   ③ 遮罩资产换成浪总指定的「66的720P遮罩」（960x720 专用）：
+    #          FC 洞 (96,27) 768x667 / GB 洞 (80,0) 800x720 / GBA (0,40) 960x639 …
+    #      实拍验证（req805，FC 三目童子）：画面内容横跨 120..863 = 744 px，
+    #      正好是无遮罩时 39..949(911px) × 768/940 —— 一个像素没被压，
+    #      底部 HUD 两端元素全部露出。
+    #
+    # 优先级：`vpo`/`vp` 文件 > `core` 标记（老包）> windows.tsv（更老的包）。
+    # ⚠ 满屏平台（原生 4:3，只有 vp=0,0,960,720）继续走 core provided：
+    #   它们本来就跟画布同比例，显式视口只会把纵版街机那种非 4:3 内容拉变形。
+    # ===================================================================
+    if vp and not full:
+        vpo = _bezel_vpo(base, plat)
+        if vpo:
+            lines += [
+                'aspect_ratio_index = "23"',               # 23 = Custom（实测确认）
+                'custom_viewport_x = "%d"' % vpo[0],       # ★ 这是相对中心的 X 偏移
+                'custom_viewport_y = "%d"' % vpo[1],       # ★ 这是相对中心的 Y 偏移
+                'custom_viewport_width = "%d"' % vpo[2],
+                'custom_viewport_height = "%d"' % vpo[3],
+            ]
+        else:
+            lines.append('aspect_ratio_index = "21"')
+    elif full:
+        # 洞 == 整个画布 ⇒ 没有边框可画，画面本来就该铺满
+        lines.append('aspect_ratio_index = "22"')          # 22 = core provided
+    elif os.path.isfile(os.path.join(base, plat, "core")):
+        # 老自造包（没有 vp）：只能退回核心比例 —— 画面会占满高度压住边框，
+        # 属于已知缺陷，下版换包即修
+        lines.append('aspect_ratio_index = "21"')     # 21 = core provided
     else:
-        # 没算出窗口就只保证"核心原生比例"，画面仍占满屏 —— 至少不变形
-        lines.append('aspect_ratio_index = "21"')  # 21 = core provided
+        win = _bezel_windows().get((mode, plat))
+        if win:
+            lines += [
+                'aspect_ratio_index = "23"',           # 23 = Custom（用下面这个视口）
+                'custom_viewport_x = "%d"' % (win[0] - (BEZEL_CANVAS[0] - win[2]) // 2),
+                'custom_viewport_y = "%d"' % (win[1] - (BEZEL_CANVAS[1] - win[3]) // 2),
+                'custom_viewport_width = "%d"' % win[2],
+                'custom_viewport_height = "%d"' % win[3],
+            ]
+        else:
+            # 没算出窗口就只保证"核心原生比例"，画面仍占满屏 —— 至少不变形
+            lines.append('aspect_ratio_index = "22"')  # 22 = core provided
     return lines
+
+
+# ------------------------------------------------------------------- 金手指
+# 用户 2026-09-18："启动弹层能加个金手指选项吗  自动找到咱们系统里面自带的
+# 对应的 ra 金手指文件  金手指功能的开关可以做到二级页面"
+#
+# 真源（**只读，绝不改**）：
+#     /home/ark/.config/retroarch/cheats/中文金手指/<平台id>中文金手指/
+#   命名 <ROM名>_ra.cht，例：1943.zip -> "1943 (J)_ra.cht"（2152 个，10 个平台）
+#
+# 前端写 /opt/vagaretro/cheats.txt（一行一条，TAB 分隔）：
+#     <平台id>\t<rom 文件名>\t<0|1>     单个游戏
+#     <平台id>\t*\t<0|1>                整个平台
+#   没写过的行 = 关（默认不打扰）。
+#
+# 启动时干三件事：
+#   ① 判定这个游戏该不该开（游戏级优先，其次平台级）
+#   ② 开 → 把匹配到的 cht **复制**进 /opt/vagaretro/cheats-auto/<corename>/<rom名>.cht，
+#          并把所有 cheatN_enable 改成 "true"；关 → 清空 cheats-auto
+#   ③ appendconfig 里覆盖：
+#        apply_cheats_after_load = "true"
+#        cheat_database_path = "/opt/vagaretro/cheats-auto"
+#
+# ★★ 为什么必须"复制"而不是软链 —— 2026-09-18 实测踩到：
+#   RA 退出时会打 `[Cheats] Save game-specific cheatfile:`，也就是**把内存里的
+#   金手指写回那个文件**。软链是透明的，等于直接改写源库：一个 642 字节的简写
+#   cht 被重写成 4127 字节的全字段格式。复制进隔离目录后源库一字不动。
+# ★★ 为什么必须把 enable 翻成 true —— cht 里每条默认 `enable = false`，
+#   而 `apply_cheats_after_load` 只管"加载后应用**已启用**的条目"，不翻这一条
+#   等于加载了个寂寞。前端总开关"开"的语义 = 该游戏的金手指全开。
+# ★ 覆盖 cheat_database_path 的副作用：玩家自己丢在
+#   ~/.config/retroarch/cheats/<核心名>/ 下的 cht 不再被自动加载。本机那个目录
+#   本来就是 10 个空壳（Nestopia/FCEUmm/mGBA… 全空），中文金手指都在
+#   "中文金手指/" 下面，RA 原本也认不出来，所以不算损失。换回来的是**零残留**：
+#   每局只往隔离目录放当前这一个文件，关了/换游戏就清空。
+CHEAT_LIB   = "/home/ark/.config/retroarch/cheats/中文金手指"
+CHEAT_AUTO  = "/opt/vagaretro/cheats-auto"
+CHEATS_PATH = "/opt/vagaretro/cheats.txt"
+
+
+def _cht_norm(s):
+    """金手指名 / ROM 名归一化。
+
+    去扩展名、去 `_ra` 尾巴、去括号内容、去空白与连接符、转小写。
+    ⇒ "1943.zip" / "1943 (J)_ra.cht" / "1943（日版）_ra.cht" 全部归一成 "1943"。
+    """
+    s = re.sub(r"\.(cht|zip|nes|fds|unf|smc|sfc|gba|gbc|gb|md|bin|gen|iso|cue|"
+               r"chd|z64|n64|v64|pce|ngc|ws|wsc|gg|a26|a78|lnx|col|jar)$",
+               "", s or "", flags=re.I)
+    s = re.sub(r"_ra$", "", s, flags=re.I)
+    s = re.sub(r"[（(\[【][^）)\]】]*[）)\]】]", "", s)
+    s = re.sub(r"[\s_\-·]+", "", s)
+    return s.lower()
+
+
+def _cheat_table():
+    """读 cheats.txt -> {(pid, rom名或*): (bool, bits 或 '')}。文件不在就返回空表。
+
+    bits = 第 4 列，条目级开关的位串（2026-09-18 晚加）：第 i 位 '1' 开 / '0' 关，
+    对应这一份 cht 里的第 i 条。**空串 = 老记录（只有三列）= 一条都不开** ——
+    "默认不勾选"是浪总 2026-09-18 晚定的产品约定，前端 vgfront.c 写的就是这一列。
+    """
+    out = {}
+    try:
+        with open(CHEATS_PATH, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.rstrip("\r\n")
+                if not line or line.startswith("#"):
+                    continue
+                p = line.split("\t")
+                if len(p) >= 3:
+                    bits = p[3].strip() if len(p) >= 4 else ""
+                    out[(p[0].strip(), p[1].strip())] = (p[2].strip() == "1", bits)
+    except OSError:
+        pass
+    return out
+
+
+def cheat_on(pid, rom_name):
+    """这个游戏该不该开金手指。游戏级优先，其次平台级（rom 名写 *）。
+    返回 (on, bits)。"""
+    t = _cheat_table()
+    if (pid, rom_name) in t:
+        return t[(pid, rom_name)]
+    return t.get((pid, "*"), (False, ""))
+
+
+def cheat_find(pid, rom_name):
+    """在中文金手指库里找这个游戏的 cht。返回 (绝对路径, 条数)；找不到 (None, 0)。
+
+    先精确归一匹配，再退一步用前缀（有的游戏 cht 名带副标题）。
+    """
+    d = os.path.join(CHEAT_LIB, "%s中文金手指" % pid)
+    want = _cht_norm(rom_name)
+    if not want or not os.path.isdir(d):
+        return None, 0
+    exact = prefix = None
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return None, 0
+    for n in names:
+        if not n.lower().endswith(".cht"):
+            continue
+        got = _cht_norm(n)
+        if got == want:
+            exact = n
+            break
+        if prefix is None and got.startswith(want):
+            prefix = n
+    pick = exact or prefix
+    if not pick:
+        return None, 0
+    full = os.path.join(d, pick)
+    cnt = 0
+    try:
+        with open(full, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if re.match(r"\s*cheat\d+_desc\s*=", line):
+                    cnt += 1
+    except OSError:
+        pass
+    return full, cnt
+
+
+def cheat_corename(cmd):
+    """从启动命令里抠核心 .so，读它的 .info 拿 corename。
+
+    RA 自动加载金手指认的目录名就是 .info 里的 `corename = "Nestopia"`，
+    **不是** display_name（那个是 "Nintendo - NES / Famicom (Nestopia)"，
+    里面带 "/"，根本没法当目录名）。2026-09-18 实测确认。
+    """
+    m = re.search(r"([\w\-\.]+)_libretro\.so", cmd or "")
+    if not m:
+        return None        # standalone（yabasanshiro / ppsspp 那些）没有 .so
+    base = "retroarch32" if "retroarch32" in cmd else "retroarch"
+    info = "/home/ark/.config/%s/cores/%s_libretro.info" % (base, m.group(1))
+    try:
+        with open(info, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                mm = re.match(r'\s*corename\s*=\s*"([^"]*)"', line)
+                if mm:
+                    return mm.group(1)
+    except OSError:
+        pass
+    return None
+
+
+def cheat_clear():
+    """清空隔离目录（连子目录一起）。每局只留当前游戏那一份，零残留。"""
+    if not os.path.isdir(CHEAT_AUTO):
+        return
+    for root, dirs, files in os.walk(CHEAT_AUTO, topdown=False):
+        for f in files:
+            try:
+                os.remove(os.path.join(root, f))
+            except OSError:
+                pass
+        for d in dirs:
+            try:
+                os.rmdir(os.path.join(root, d))
+            except OSError:
+                pass
+
+
+CHEAT_MAX_BITS = 192        # ★ 必须和前端 vgfront.c 的 CHEAT_MAX 一致
+
+
+def _cheat_apply_bits(body, bits):
+    """按位串把每条的 cheatN_enable 设成该有的值。
+
+    返回 (新 body, 改了几行, 补了几行)。规则：
+      · ★ **默认全关**：没记录 / 位串不够长 / 那一位不是 '1'，一律算关。
+        浪总 2026-09-18 晚："金手指打开之后点进去的功能不要默认都是开启的呀
+        容易出bug" —— 库里 101 个文件 >255 条（最大 23107 条），全 enable
+        既可能把 RA 拖死，多条金手指互相打架也可能把游戏搞崩。
+      · ★ 只处理**前 CHEAT_MAX_BITS 条**（按 cheatN 序号排序）—— 前端只展示
+        这么多，启动器就只管这么多，两边口径必须一样。界面外的条目原样不动。
+      · ★ 缺 enable 行的条目要**补一行**：RA 对没写 enable 的条目默认
+        false，而中文包里真有这种文件（大航海时代2PS.cht 23107 条，一条
+        enable 都没写）。不补的话就是"前端显示开着、实际一条都不生效"。
+    """
+    idxs = sorted(set(int(m) for m in re.findall(r"cheat(\d+)_desc\s*=", body)))
+    idxs = idxs[:CHEAT_MAX_BITS]
+    want = {}
+    for i in idxs:
+        want[i] = bool(bits and i < len(bits) and bits[i] == "1")
+
+    nset = [0]
+
+    def rep(m):
+        i = int(m.group(1))
+        if i not in want:
+            return m.group(0)                    # 界面外的条目原样不动
+        nset[0] += 1
+        return 'cheat%d_enable = "%s"' % (i, "true" if want[i] else "false")
+
+    body = re.sub(r'cheat(\d+)_enable\s*=\s*"?[A-Za-z]+"?', rep, body)
+
+    have = set(int(m) for m in re.findall(r"cheat(\d+)_enable\s*=", body))
+    miss = [i for i in idxs if i not in have]
+    if miss:
+        if not body.endswith("\n"):
+            body += "\n"
+        for i in miss:
+            body += 'cheat%d_enable = "%s"\n' % (i, "true" if want[i] else "false")
+    return body, nset[0], len(miss)
+
+
+def cheat_lines(cmd, pid, rom_name):
+    """金手指要写进 appendconfig 的行。返回 (lines, 说明文案)。
+
+    说明文案为 None = "这个游戏没开金手指"，正常情况，不写日志。
+    """
+    on, bits = cheat_on(pid, rom_name)
+    if not on:
+        cheat_clear()               # 关着也要清，别让上一局的残留继续生效
+        return [], None
+
+    src, cnt = cheat_find(pid, rom_name)
+    if not src:
+        cheat_clear()
+        return [], "库 %s中文金手指 里没有匹配 %s 的文件" % (pid, rom_name)
+
+    corename = cheat_corename(cmd)
+    if not corename:
+        cheat_clear()
+        return [], "这条命令没有 *_libretro.so，判不出核心"
+
+    try:
+        with open(src, encoding="utf-8", errors="replace") as fh:
+            body = fh.read()
+    except OSError as e:
+        cheat_clear()
+        return [], "读 %s 失败: %s" % (src, e)
+
+    # 按位串逐条设 enable（bits 空 = 老记录 = 全关；缺 enable 行的补齐）
+    body, nset, nadd = _cheat_apply_bits(body, bits)
+
+    cheat_clear()                   # 先清，隔离目录里只留这一份
+    dst_dir = os.path.join(CHEAT_AUTO, corename)
+    rom_base = os.path.splitext(os.path.basename(rom_name))[0]
+    dst = os.path.join(dst_dir, rom_base + ".cht")
+    try:
+        os.makedirs(dst_dir, mode=0o755, exist_ok=True)
+        with open(dst, "w", encoding="utf-8") as fh:
+            fh.write(body)
+    except OSError as e:
+        return [], "写 %s 失败: %s" % (dst, e)
+
+    return [
+        "# 金手指（前端「启动游戏 → 金手指」开的）",
+        "#   源: %s" % src,
+        'apply_cheats_after_load = "true"',
+        'cheat_database_path = "%s"' % CHEAT_AUTO,
+    ], ("核心 %s，%d 条（改 %d / 补 %d），副本 -> %s"
+        % (corename, cnt, nset, nadd, dst))
 
 
 def play_apconfig_write(lines):
@@ -3076,29 +3982,69 @@ def build_launch_script(cfg, systems, payload, platform_id):
     #   --appendconfig，硬塞会直接启动失败。
     ap_lines = []
     bezel = read_vgfront_conf("bezel")
-    if bezel:
-        bl = bezel_lines(pid, bezel)
-        if bl:
-            ap_lines += bl
-            log("遮罩 %s 已挂上：平台 %s" % (bezel, pid))
+    bl = bezel_lines(pid, bezel)          # bezel 为空时函数内部直接返回 []
+    if bl:
+        ap_lines += bl
+        log("遮罩 %s 已挂上：平台 %s" % (bezel, pid))
+    elif "retroarch" in final:
+        # ===================================================================
+        # ★★★ 2026-09-18 方案 A（浪总拍板）：「不挂遮罩」≠「满屏」，必须显式垫一行。
+        #
+        # RA 全局 retroarch32/retroarch.cfg 里是**出厂残值**：
+        #     aspect_ratio_index = "22"          ← **Core provided**（2026-09-18 实测确认）
+        #     custom_viewport_x/y/width/height   ← 0,0,640x480（22 下 RA 压根不读它）
+        # 也就是说"掉到出厂值"其实没那么可怕（画面会按核心比例铺）；
+        # 但还是显式垫一行，理由是**可预期**：不依赖 RA 的隐式回退，
+        # 将来固件换 RA 版本 / 出厂值被改也不会突然变样。
+        #
+        # 两类情况会走到这个分支，**都必须垫**：
+        #   ① 用户把「游戏遮罩」设为关闭（bezel 为空串 / 没这一行）
+        #      —— 前端设置页那一项选「关闭」时就是这个状态
+        #   ② 平台走 RA 但不在 BEZEL_PLAT 里，或这套包（960x720）里没它的目录
+        #      —— 本机 2026-09-18 的 index.tsv 里 20 个平台全在表内，
+        #         所以当下 ① 是主要场景；② 是给"以后卡上出现新平台"兜底
+        #         （BEZEL_PLAT 只有 21 个键，ATARI2600/7800、GW 之类就不在里面）
+        #
+        # 垫什么：`22` = **core provided**（实测：FC 下画面 940×720 = 核心自报 1.306；
+        # 且它**完全无视 custom_viewport** —— idx22+vp(99,14,762,668) 画面纹丝不动）。
+        # RA 按**核心比例**最大内接居中：
+        #     · 4:3 核心（PS1/MD/SFC/DC…）⇒ 960x720 满屏，跟挂遮罩时一模一样
+        #     · 非 4:3（GB 10:9 / GBA 3:2 / PSP 16:9…）⇒ 居中留黑边，不变形
+        # 比改成 `0`(4:3) 强：`0` 会把 GB 这类**拉变形**成 4:3。
+        # ⚠ 别写 `21`：本机没量准 21 到底是什么（旧表从 21 起整体偏了 1），
+        #   而 22 是三组真机对照钉死的 core provided。也别写 `23`：
+        #   23 = Custom 会用 custom_viewport(=640x480 残值) 把画面拉到左上角。
+        #
+        # ⚠⚠ 每份 appendconfig 里 `aspect_ratio_index` **只写一次**：bezel_lines()
+        #   返回带遮罩的配置时，它自己已经写了 `23` + custom_viewport_*；
+        #   这里只在它**没返回**时才垫 `22`。不要反过来先在前面垫一行指望后面覆盖
+        #   —— 同键重复写的行为 RA 没有明确保证，且会让 appendconfig 难读。
+        # ===================================================================
+        ap_lines.append('aspect_ratio_index = "22"')
+        if bezel:
+            log("遮罩 %s：平台 %s 在这套包里没有对应目录，改用核心比例 22（防掉到全局残值）"
+                % (bezel, pid))
         else:
-            log("遮罩 %s：平台 %s 在这套包里没有对应目录，跳过" % (bezel, pid))
+            log("遮罩已关闭：平台 %s 按核心比例 22（防掉到全局残值）" % pid)
     al = autosave_lines(pid)
     if al:
         ap_lines += al
         log("退出自动存档已挂上：平台 %s" % pid)
 
-    # ---- 存档位（每个游戏一套）--------------------------------------------
-    # 前端弹层的「加载存档」。它跟「退出自动存档」是**两件事**：
-    #   退出自动存档 = 平台级开关，用 RA 当前的 state_slot（默认 0）
-    #   加载存档     = 游戏级，把 state_slot 指到第 N 位、只开 auto_load
-    # 两个都开时，RA 后读的行覆盖先读的（这段排在 autosave 之后），
-    # 所以 state_slot 最终落在游戏级那一位，而 auto_save 仍由平台开关决定 ——
-    # 存进去的正好是玩家选的那一位，语义正确，顺序放后面没问题。
-    sl = slot_lines(pid, _rel_in_compat(rom, cfg))
-    if sl:
-        ap_lines += sl
-        log("存档位已挂上：平台 %s" % pid)
+    # ---- 金手指：按游戏（用户 2026-09-18）--------------------------------
+    # 前端写 cheats.txt（<平台id>\t<rom文件名>\t<0|1>，rom 名写 * = 整个平台）。
+    # 只有走 retroarch 的平台能用 —— 金手指是 RA 自己的机制，standalone
+    # （yabasanshiro / ppsspp / drastic）那些没有这个概念。
+    rom_name = os.path.basename(rom or "")
+    if "retroarch" in final:
+        cl, cdesc = cheat_lines(final, pid, rom_name)
+        if cl:
+            ap_lines += cl
+            log("金手指已挂上：%s / %s（%s）" % (pid, rom_name, cdesc))
+        elif cdesc:
+            log("金手指：%s" % cdesc)
+    else:
+        cheat_clear()          # 用不上，顺手把上一局的残留清掉
 
     if ap_lines:
         if "retroarch" in final:

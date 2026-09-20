@@ -50,11 +50,15 @@ PLATFORM_META = [
     #   做「左右并排双屏」（NDS 上下屏各占半个屏宽）。原版 DraStic 没有这个能力。
     #   core 写 drastic_adv-sa 而不是 drastic，是为了在「当前核心」里能区分出高级版。
     ("NDS",        "nintendo", "Nintendo DS",            "任天堂",   "drastic_adv-sa",      "NDS",   "任天堂",   "#cfd8dc", "#90a4ae"),
-    # ★ J2ME（2026-09-16 新增）—— Java 手机游戏。
-    #   目录：/roms2/j2me（卡二），compat 名 J2ME
-    #   启动：es_systems.cfg 的 j2me 段 -> /usr/local/bin/freej2me.sh
-    #         -> retroarch -L cores/freej2me-plus_libretro.so（用系统 OpenJDK 21）
-    #   core 字段写 freej2me-plus 是为了前端显示"当前核心"时有个确切名字。
+    # ★ J2ME（2026-09-16 新增，2026-09-18 换成独立版）—— Java 手机游戏。
+    #   目录：/roms/j2me（内部卡 p5），compat 名 J2ME。
+    #   **启动方式 2026-09-18 改了**：es_systems.cfg 的 j2me 段现在指向
+    #     /usr/local/bin/j2me-3566.sh  →  freej2me-sdl 独立版
+    #       （自带 32 位 armhf Zulu JDK17 + sdl_interface，cwd=/opt/j2me-3566）
+    #   不再走 retroarch 的 freej2me-plus 核心 —— 独立版才能用手柄组合键
+    #     select+start 切按键模式 / select+Y 旋转画面 / select+X 触屏
+    #   （旧的 /usr/local/bin/freej2me.sh 留着没删，可回滚。）
+    #   core 字段保留 freej2me-plus 只为前端"当前核心"那栏有个可读名字。
     ("J2ME",       "other",    "J2ME 手机游戏",          "Java",     "freej2me-plus",       "J2ME",  "Java",     "#f39c12", "#d68910"),
     ("MD",         "sega",     "Mega Drive",             "世嘉",     "genesis_plus_gx",     "MD",    "世嘉",     "#e67e22", "#d35400"),
     ("SS",         "sega",     "Saturn",                 "世嘉",     "yabause",             "SS",    "世嘉",     "#1abc9c", "#16a085"),
@@ -80,6 +84,17 @@ PLATFORM_META = [
     ("PICO8",      "other",    "PICO-8 幻想主机",        "Fantasy",  "pico8",               "P8",    "幻想主机", "#e84393", "#c2185b"),
     ("PORTS",      "computer", "移植游戏 Ports",         "电脑",     "SDL",                 "PORT",  "电脑",     "#00b894", "#00795f"),
     ("EASYRPG",    "computer", "RPG Maker / EasyRPG",    "电脑",     "easyrpg",             "RPG",   "电脑",     "#5c6bc0", "#3949ab"),
+
+    # ★ 文件管理（2026-09-18 新增）—— **不是模拟器**，是自研的 SDL2 文件管理器
+    #   /opt/vagaretro/native/vgfiles（源码 native/vgfiles.c，跟 vgfront 同一套
+    #   SDL2 + NotoSansCJK 字体）。挂在「其他」分类。
+    #
+    #   /roms/files/ 是个**虚目录**，里面只有一个占位文件「文件管理器.vgfm」：
+    #   前端对"没有游戏的平台"是**不画卡片**的（2026-09-16 浪总定的），
+    #   所以必须让它至少有一项，卡片才出得来。
+    #   点卡片 → 进去只有一项 → 按 A → 走 es_systems.cfg 的 files 段
+    #     → /opt/vagaretro/native/vgfiles /roms
+    ("FILES",      "other",    "文件管理器",              "工具",     "vgfiles",             "FILE",  "工具",     "#607d8b", "#37474f"),
 ]
 
 # PLATFORM_META 元组里前 7 个字段的名字（第 8、9 个是渐变的 c1/c2，单独处理）
