@@ -84,7 +84,7 @@ LANGOS 把中间那一段换掉：
 ```
 .
 ├── native/                     原生前端（主战场）
-│   ├── vgfront.c               ★ 前端本体，单文件 C，约 1.4 万行
+│   ├── vgfront.c               ★ 前端本体，单文件 C，约 1.3 万行
 │   ├── dev-env.sh              在设备上补齐 SDL2 / libc 头文件（不装包、不动系统）
 │   └── build-vgfront.sh        一键编译
 │
@@ -162,6 +162,22 @@ vagaretro-front.sh 看到 launch.sh 存在 → bash 它 → 跑完删掉 → 再
 `vagaretro-shell.py --gen-index` 扫 ROM 目录生成 `/opt/vagaretro/index.tsv`
 （一行一个游戏，`V/M/P/C` 四种行），前端只读这个文件，启动时不需要遍历文件系统。
 卡二（TF2）会挂到 `/roms2` 并**优先**当 ROM 根。
+挂载点下面多一层 `Roms/` 的卡（天马那类安卓前端导出的卡）也会被自动认出来。
+
+### 5. 模拟器之外的事，前端自己管
+
+前端不只是列表和封面，下面这些都做在 `vgfront.c` 里，不依赖任何外部工具：
+
+| 功能 | 说明 |
+| --- | --- |
+| **金手指** | 读系统内置的中文金手指库（`.cht`），在弹层里按条开关；按平台判定适用性，没有可用条目的游戏不显示这一项 |
+| **自动存档** | 按平台记住"退出时存到哪一位"，写进 RA 的 `autosave_slot` |
+| **息屏 / 待机** | 超时档位写设备端的 `.TIMEOUT`，交给镜像自带的 autosuspend |
+| **RA 帧数开关** | 直接改 RA 配置，不用进 RA 菜单 |
+| **音量** | 走 ALSA 直接读写，不走任何 mixer 包装 |
+| **遮罩自动检测** | 按屏幕实际尺寸挑 `bezels/<WxH>`，非整数缩放也能对上 |
+| **Wi-Fi** | 扫描 / 连接 / 存密码（软键盘自绘，掌机没有物理键盘） |
+| **亮度 / 电池 / 关机** | 见 `docs/快捷键说明.md` |
 
 ---
 
@@ -231,7 +247,7 @@ sudo systemctl start emulationstation
 | 主页 | A | 进入该平台 |
 | 主页 | Y | 打开搜索 |
 | 主页 | START | 打开设置页 |
-| 游戏列表 | A | 打开操作弹层（启动 / 收藏 / 换核心 / 着色器 / 读档 / 自动存档 / 删除） |
+| 游戏列表 | A | 打开操作弹层（启动 / 收藏 / 换核心 / 着色器 / 自动存档 / **金手指** / 删除。金手指只在该游戏有条目时出现） |
 | 游戏列表 | B | 回主页 |
 
 游戏里 **所有组合键都要先按住 M 键**（机身中间那个，出厂门禁 `input_enable_hotkey_btn = "10"`）：
@@ -259,7 +275,7 @@ sudo systemctl start emulationstation
 | --- | --- | --- |
 | NDS | advanced_DraStic（trngaje 版） | 自带布局系统，默认**左右并排双屏**，各 384×288 |
 | DC / SS | flycast / yabasanshiro（standalone） | 见 `docs/真机启动链路与平台映射.md` |
-| J2ME | freej2me-plus（RA 核心）+ 系统 OpenJDK 21 | 2026-09 接入 |
+| J2ME | **freej2me-sdl（独立版）** | 自带 armhf JDK；手柄组合键切按键模式 / 旋转画面 / 触屏 |
 | N64 / PSP | 对应的 standalone | 同上 |
 
 ---
@@ -314,5 +330,6 @@ sudo systemctl start emulationstation
 
 ---
 
-*README 最后一次核对：2026-09-16。改过 `vagaretro-shell.py` 的映射表、
-`vgfront.c` 的按键分派或 RA 热键之后，请回来同步 [按键](#按键) 那一节。*
+*README 最后一次核对：2026-09-20（对应 MiniLoong Pocket1 / 20260919 固件）。改过
+`vagaretro-shell.py` 的映射表、`vgfront.c` 的按键分派或 RA 热键之后，
+请回来同步 [按键](#按键) 那一节。*
