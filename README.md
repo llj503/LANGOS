@@ -20,6 +20,7 @@ LANGOS 不是一套从零写的模拟器固件，而是**换掉渲染层**的做
 - [核心设计](#核心设计)
 - [编译](#编译)
 - [部署到设备](#部署到设备)
+- [机型适配](#机型适配硬件探测--降级)
 - [按键](#按键)
 - [平台与模拟器](#平台与模拟器)
 - [已知限制](#已知限制)
@@ -65,17 +66,42 @@ LANGOS 把中间那一段换掉：
 
 ## 跑在哪两台机器上
 
-| | **MINILOONG Pocket1** | **R36H ProMax（dArkOS 阶段）** |
+| | **MINILOONG Pocket1** | **R36H ProMax** |
 | --- | --- | --- |
 | SoC | RK3566 | RK3326 |
-| 系统 | Debian 13 (trixie) | dArkOS4Clone（Armbian 系） |
-| 屏幕 | 物理 720×960 竖屏，逻辑 960×720 | 640×480 |
-| GPU / 驱动 | Mali-G52 + 现成 blob | Mali-G31 + `libMali.so`（r13p0） |
-| 前端 | `vgfront`（SDL2 + KMSDRM + GLES2） | 同左 |
-| 状态 | **当前主力开发目标** | 阶段 1/2 已闭环，见 `docs/历史-README-dArkOS阶段.md` |
+| 系统 | Debian 13 (trixie) | Ubuntu 19.10 (eoan) |
+| 屏幕 | 物理 720×960 竖屏，逻辑 960×720 | 1024×768 |
+| GPU / 驱动 | Mali-G52 + 现成 blob | Mali-G31 + SDL2 KMSDRM |
+| SDL2 | 运行时 = 头文件，2.26+ | 运行时 **2.0.32** / 头文件 **2.0.10** ← 见下 |
+| 前端 | `vgfront`（SDL2 + KMSDRM + GLES2） | 同左（**同一份源码**） |
+| 状态 | **当前主力开发目标** | 前端已移植并实机验证 |
 
 两台的渲染路径其实是同一套：**SDL2 的 KMSDRM 后端直接占 DRM，走 gbm winsys，绕开 wayland**。
 这也是当初决定"不折腾网页前端"的原因——详见 `docs/原生前端方案.md`。
+
+### 同一份源码怎么同时喂两台机器
+
+两台主要差在**开发环境**，不在代码：
+
+| | MINILOONG (RK3566) | R36H ProMax (RK3326) |
+| --- | --- | --- |
+| SDL2 运行时 | 2.26+ | **2.0.32**（镜像自带） |
+| SDL2 开发头 | 同版本 | **2.0.10**（老 apt 包） |
+
+⇒ 3326 这边**头比库老 22 个小版本**：`SDL_Vertex` / `SDL_RenderGeometry`（2.0.18 才加）
+头文件里没有、但运行时库里**确实有**（`nm -D` 可查）。
+
+解法是 `native/sdl2_compat.h`：用 `#if !SDL_VERSION_ATLEAST(2,0,18)` 把缺的声明补上，
+编译时 `gcc -include` 带进去。**新头环境下这段展开成空操作**，所以：
+* MiniLoong 用它 → 什么也不做，二进制不变
+* R36H ProMax 用它 → 补上声明，正常编译
+
+分辨率自适应也是同源的：`g_scale = 窗口宽 / 1920` + `SDL_GetDesktopDisplayMode`
++ `SDL_GL_GetDrawableSize`，**布局代码一行不用改**（1024×768 自动得到 `g_scale≈0.533`）。
+
+硬件差异（只有迷你龙有 aw20036 摇杆灯等）由 `hw_probe()` 在启动时探一次，
+探不到就把设置页对应入口**藏掉**、相关写入给中文原因 —— 同样是**保留 + 降级**，
+不删功能、不写死机型。详见下面"机型适配"。
 
 ---
 
@@ -85,8 +111,14 @@ LANGOS 把中间那一段换掉：
 .
 ├── native/                     原生前端（主战场）
 │   ├── vgfront.c               ★ 前端本体，单文件 C，约 1.3 万行
+│   ├── sdl2_compat.h           给「头比库老」的设备补 SDL2 声明（空操作兼容）
 │   ├── dev-env.sh              在设备上补齐 SDL2 / libc 头文件（不装包、不动系统）
-│   └── build-vgfront.sh        一键编译
+│   ├── build-vgfront.sh        一键编译（MiniLoong / RK3566）
+│   ├── build-vgfront-3326.sh   一键编译（R36H ProMax / RK3326，带 -include 兼容头）
+│   └── boot-anim/
+│       ├── langos-bootanim.c   ★ 开机动画（直接写 /dev/fb0，mmap 失败自动降级 pwrite）
+│       ├── mk-langos-boot-raw.py  把 PNG 序列打成 .raw 帧数据
+│       └── patch-3326-bootanim.sh 幂等地把开机动画挂进 vagaretro-front.sh
 │
 ├── boot/                       第二屏引导器
 │   ├── vgboot.c                开机 logo / 启动画面
@@ -111,7 +143,8 @@ LANGOS 把中间那一段换掉：
 │   └── logo.png
 │
 ├── prebuilt/
-│   └── rk3566/vgfront          现役预编译二进制（不想装工具链可以直接用）
+│   ├── rk3566/vgfront          现役预编译二进制（迷你龙；不想装工具链可以直接用）
+│   └── rk3326/vgfront          现役预编译二进制（R36H ProMax / dArkOS 系克隆机）
 │
 └── docs/
     ├── 原生前端方案.md          ★ 为什么原生、架构怎么切、渲染设计
@@ -183,7 +216,9 @@ vagaretro-front.sh 看到 launch.sh 存在 → bash 它 → 跑完删掉 → 再
 
 ## 编译
 
-**在设备上编**（RK3566 上没有交叉工具链，但设备自带 `gcc`）：
+**在设备上编**（两台都没有交叉工具链，但设备自带 `gcc`）。
+
+### RK3566 / MiniLoong
 
 ```bash
 # 1) 先补头文件（幂等；用 apt-get download 只下 .deb，不装、不改系统）
@@ -196,10 +231,36 @@ gcc $VG_CFLAGS -O2 -Wall -o vgfront native/vgfront.c $VG_LDFLAGS -lSDL2 -lSDL2_t
 
 实测 RK3566 上编一轮 **30~36 秒**。
 
+### RK3326 / R36H ProMax（dArkOS 系）
+
+这台**头比库老**（见上），必须带上 `sdl2_compat.h`，所以有独立脚本：
+
+```bash
+bash native/build-vgfront-3326.sh            # 默认读 ./vgfront.c，出 ./vgfront.new
+# 或指定：bash native/build-vgfront-3326.sh <源码> <输出>
+```
+
+脚本里做了三件事，都是踩过坑加的：
+1. `-include sdl2_compat.h` 补 `SDL_Vertex` / `SDL_RenderGeometry` 声明；
+2. `-isystem /opt/vagaretro/sdl2dev/inc`（**本机 `/usr/include` 被精简过**，
+   连 `dirent.h` 都没有，得用 `-isystem` 而不是 `-I`）；
+3. 编完自动 `ldd -r` 查一遍 **undefined symbol** —— 有就直接报错退出，别让坏二进制上机。
+
+### 开机动画
+
+`native/boot-anim/langos-bootanim.c`，用 `native/boot-anim/patch-3326-bootanim.sh`
+打补丁挂进 `vagaretro-front.sh`（幂等，改前自动备份，带 `bash -n` 自检）。
+
+> ⚠️ **`/dev/fb0` 在 RK3326 上不支持 mmap**（返回 `EINVAL`，是驱动层面的事）。
+> 所以 `langos-bootanim` 带**两条路**：先试 mmap，失败就退回 `malloc` + 每帧 `pwrite` 整帧。
+> 两条路的最终画面**逐像素一致**（实测仅 447 像素差异，正好是 3 个进度点）。
+
+### vgboot
+
+`boot/build-vgboot.sh`。
+
 > ⚠️ 编译前记得删掉旧产物并 grep 一遍 `error:`——
 > gcc 失败时**不会动旧二进制**，光看"文件在不在"会把上一版当成这次成功。
-
-`vgboot` 用 `boot/build-vgboot.sh` 编。
 
 ---
 
@@ -230,6 +291,53 @@ sudo systemctl start emulationstation
 > 2. 前端**只能以固定身份跑**。以 root 跑会生成 `root:root` 的文件（日志、解包缓存），
 >    之后前端以 `ark` 身份跑就写不进去，表现为"点了游戏没反应"。
 >    历史上真踩过这个坑：`/tmp/drastic_adv-sa.log` 与 `unzip_cache/` 被 root 抢先建过。
+
+---
+
+## 机型适配（硬件探测 + 降级）
+
+两台机器的外设并不一样。比如 **aw20036 摇杆灯只有 MiniLoong 有**，
+`batteryplus` 算出来的 `/tmp/battery.percent`、`auto_suspend_update.sh` 也只在迷你龙上。
+
+早期代码是**直接拼路径写**的，在 3326 上会静默失败——界面不报错，但设置页会多出
+一整页"摇杆灯"，玩家点进去三项全都改不动。这比报错更糟。
+
+**现在的做法：保留 + 降级**（不删任何功能，也不写死机型）：
+
+```c
+static int g_hw_led = -1;          /* -1=还没探  0=没有  1=有 */
+
+static void hw_probe(void)
+{
+    g_hw_led = (access(LED_DIR, F_OK) == 0) ? 1 : 0;
+}
+```
+
+启动时探**一次**（这些硬件不会热插拔），然后：
+
+* **探不到 → 把设置页里对应的入口整项藏掉**（`MENUS[M_DISP].n` 跟着减）。
+  这跟"金手指库里没有就不显示金手指项"是同一个思路。
+* **相关写入函数立刻返回失败 + 中文原因**，不静默
+  （`led_apply()` 会返回「本机没有摇杆灯硬件」）。
+* **探到 → 什么都不变**，3566 上行为与从前完全一致。
+
+这么写的好处：**同一份源码、同一个二进制布局，两个平台通吃**。
+以后加新机型，只要往 `hw_probe()` 里加一条探测就行，不用动别的代码。
+
+### 手柄映射：只补缺，不覆盖
+
+R36H ProMax 上踩过一个坑：日志打 `START -> 未绑定(type=0)`。
+
+根因**不在我们的改动**，而是 SDL 报回来的基础映射本身就缺键——
+`SDL_GameControllerMappingForGUID()` 在 2.0.26+ 之后，若 GUID 在自带库里
+但那条记录**没写 start/back**（这台「GO-Super Gamepad」就是），返回的串里就真没有这两段。
+
+修法是 `pad_fill_missing()`：**只补缺**——
+已有的键一个都不动，只填 SDL 没说的；补的值优先问**原厂 `/etc/emulationstation/es_input.cfg`**，
+取不到才回落到内置默认（`start=b13` / `back=b12`，本机实测）。
+
+> 为什么不干脆写死整张表：本工程 09-15 已经因为"写死 GUID + 整张表"翻过车
+> （换一台机器就全乱）。**只补缺**是唯一在"兼容"和"不越权"之间站得住的写法。
 
 ---
 

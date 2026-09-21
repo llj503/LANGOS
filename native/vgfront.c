@@ -4770,6 +4770,43 @@ static const char *const LED_FX_VAL[]   = { "solid", "breathe", "blink", "pulse"
 #define LED_CHASE_SH   "/usr/local/bin/langos-led-chase.sh"
 #define LED_CHASE_SVC  "langos-led-chase.service"
 
+/* ---- 硬件能力探测（2026-09-21，为 RK3326 平台移植加）--------------------
+ *
+ *  ★ 背景：前端从 MINILOONG(RK3566) 移植到 RK3326（R36H Pro Max / A10Mini
+ *    / xu10 这些 dArkOS 克隆机）时，有几样**只有迷你龙有**的外设：
+ *      · aw20036 摇杆灯（LED_DIR）
+ *      · batteryplus 算出来的 /tmp/battery.percent
+ *      · /usr/local/bin/auto_suspend_update.sh
+ *    这些在 3326 上都不存在。原代码里 LED_DIR 是**直接拼路径写**的，
+ *    在 3326 上会静默失败（写不进去、界面不报错），但更糟的是**设置页会
+ *    多出一整页"摇杆灯"，玩家点进去三项全都改不动** —— 这才是要治的。
+ *
+ *  ★ 策略（浪总 2026-09-21 定）：**保留 + 加降级** ——
+ *    不删任何功能，统一用 hw_probe() 在启动时探一次硬件，探不到就
+ *    · 把设置页里对应的**入口整项藏掉**（跟金手指"库里没有就藏项"一个思路）
+ *    · 相关写入函数直接返回失败并给中文原因，不静默
+ *    这样同一份源码两个平台通吃，以后加新机型只要往 hw_probe() 里加一条。
+ *
+ *  ⚠ 探测只在启动时跑一次，结果缓存在全局变量里 —— 这些硬件不会热插拔。
+ * ========================================================================*/
+static int g_hw_led   = -1;   /* -1=还没探  0=没有摇杆灯  1=有 */
+
+static void hw_probe(void)
+{
+    /* 摇杆灯：认 LED_DIR 这个目录本身。aw20036 驱动只装在迷你龙上，
+       3326 的 /sys/class/leds/ 下是别的名字（或者根本没有）。
+       ★ 这里只探这一项 —— 电量（battery_pct）和息屏（SV_SLEEP）那两处
+         本来就是容错的，各自在使用点降级，不需要在这里预判。 */
+    g_hw_led = (access(LED_DIR, F_OK) == 0) ? 1 : 0;
+
+    printf("硬件探测: 摇杆灯=%s\n", g_hw_led ? "有" : "无（设置页会藏掉那一项）");
+    fflush(stdout);
+}
+
+/* 设置页「显示」分组里，摇杆灯入口是不是要藏掉。
+   （IT_DISP 的最后一项就是它，藏了就少一行 —— MENUS[M_DISP].n 跟着减。） */
+static int hw_has_led(void) { return g_hw_led > 0; }
+
 /* ---- RetroArch 主题（用户 2026-09-16："设置里面加个 RA 主题调节功能"）----
 
    RA 的外观分两层，配置键名是从设备上的 RA 二进制里 strings 出来的（实测）：
@@ -5115,10 +5152,15 @@ typedef struct { const char *title; const SItem *items; int n; } SMenu;
 
 /* ⚠ 顺序必须与上面 M_* 下标严格一致。
    这张表**不能加 const** —— M_WIFI 那一项的 n 是扫描完才填的。 */
+#define IT_DISP_N ((int)(sizeof(IT_DISP) / sizeof(IT_DISP[0])))
+
 static SMenu MENUS[] = {
     { "设置",       IT_ROOT,     (int)(sizeof(IT_ROOT)  / sizeof(IT_ROOT[0]))  },
     { "声音",       IT_SOUND,    (int)(sizeof(IT_SOUND) / sizeof(IT_SOUND[0])) },
-    { "显示",       IT_DISP,     (int)(sizeof(IT_DISP)  / sizeof(IT_DISP[0]))  },
+    /* ★ 显示页的最后一项是「摇杆灯」—— 迷你龙专属。没有 aw20036 的机器
+       （RK3326 全体）上必须把它藏掉，否则玩家点进去三项全改不动。
+       条数在 main() 里 hw_probe() 之后按 g_hw_led 覆写（见 main）。 */
+    { "显示",       IT_DISP,     IT_DISP_N  },
     { "主题",       IT_THEME_DYN, 0 },          /* 条数由 theme_scan() 填 */
     { "网络与传输", IT_NET,      (int)(sizeof(IT_NET)   / sizeof(IT_NET[0]))   },
     { "无线网络",   IT_WIFI_DYN, 0 },          /* 条数由 wifi_scan() 填 */
@@ -6266,10 +6308,13 @@ static int led_cur_pct(void)
 }
 
 /* 写一个 led 属性。sysfs 有的节点要带换行的 echo 才认，所以直写失败
-   再用 shell 兜一次 —— 跟调速器那几项同一套写法。 */
+   再用 shell 兜一次 —— 跟调速器那几项同一套写法。
+   ★ 2026-09-21：没有摇杆灯的机器直接短路返回 0，不去 write 一个不存在的
+     路径（免得 srun 起一个必然失败的 shell，在 3326 上白耗一次 fork）。 */
 static int led_write(const char *attr, const char *val)
 {
     char path[128], cmd[192];
+    if (!hw_has_led()) return 0;
     snprintf(path, sizeof(path), LED_DIR "/%s", attr);
     if (swrite_line(path, val)) return 1;
     snprintf(cmd, sizeof(cmd), "echo %s > %s 2>/dev/null", val, path);
@@ -6316,6 +6361,13 @@ static int led_apply(int mode, int bri, int fx, int user_mode, char *fb, size_t 
 {
     if (mode < 0 || mode >= LED_MODE_N) { snprintf(fb, cap, "选项越界"); return 0; }
     if (fx   < 0 || fx   >= LED_FX_N)   { snprintf(fb, cap, "选项越界"); return 0; }
+    /* ★ 2026-09-21：本机没有 aw20036 摇杆灯（RK3326 全体）——
+       设置页那个入口本来就被藏了，这里是第二道闸：万一有别的路径调进来，
+       给一句人话而不是静默失败。 */
+    if (!hw_has_led()) {
+        snprintf(fb, cap, "本机没有摇杆灯硬件");
+        return 0;
+    }
     if (bri < 1) bri = 1;
     if (bri > LED_MAXBRI) bri = LED_MAXBRI;
 
@@ -11985,6 +12037,105 @@ static void handle_key(SDL_Keycode k)
  *    只是不再写死任何设备相关的值。
  */
 
+/* 映射串里某个键在不在（键名恰好是 `key:` 那一段） */
+static int pad_has_key(const char *map, const char *key)
+{
+    size_t kl = strlen(key);
+    for (const char *p = map; *p; ) {
+        const char *e = strchr(p, ',');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len > kl + 1 && p[kl] == ':' && strncmp(p, key, kl) == 0) return 1;
+        if (!e) break;
+        p = e + 1;
+    }
+    return 0;
+}
+
+/* --------------------------------------------------------------------------
+ *  补齐 SDL 映射里缺失的关键键（2026-09-20 在 R36hProMax 上踩出来的）
+ *  --------------------------------------------------------------------------
+ *  症状：新版 vgfront 在这台机器上日志打
+ *        [_pad] START -> 未绑定(type=0) / BACK -> 未绑定(type=0)
+ *        而同一台机器跑旧版（09-14 编的）却是 start=b13 back=b12。
+ *
+ *  根因**不在我们的改动**，而是 SDL 报回来的那张基础映射本身就缺键：
+ *      SDL_GameControllerMappingForGUID() 在 2.0.26+ 之后，若 GUID 不在
+ *      自带库里就返回 NULL；若在库里但那条记录**没写 start/back**（这台
+ *      「GO-Super Gamepad」就是这种），返回的串里就真没有这两段。
+ *        base = 1900bb3e..., GO-Super Gamepad, a:b0,b:b1, x:b2,y:b3,
+ *               leftshoulder:b4, rightshoulder:b5, dpup:b8..dpright:b11,
+ *               leftx:a0..righty:a3, lefttrigger:b6, righttrigger:b7
+ *        ← 到此为止，start/back/guide 一个都没有。
+ *    vendor 库（我们自编的 libSDL2-2.0.so.0.3200.10）自带表里就是这条。
+ *
+ *  为什么不能干脆写死：本工程 09-15 已经因为「写死 GUID + 整张表」翻过车
+ *  （见 pad_add_mapping 上面的长注释）。所以这里**只补缺**：
+ *    · 先问 SDL 自带的 `es_input.cfg`（原厂按键表，权威且随设备走）要值；
+ *    · 取不到才回落到内置默认（start=b13 / back=b12，本机实测）。
+ *  已有的键一个都不动 —— SDL 说什么就是什么，我们只填它没说的。
+ */
+#define PAD_ES_INPUT_CFG "/etc/emulationstation/es_input.cfg"
+
+/* 从 es_input.cfg 里抓 <input name="Xxx" type="button" id="N" ...> 的 N。
+   找不到返回 -1。不用 XML 库 —— 这文件格式固定，扫字符串就够，
+   也不引入额外依赖。 */
+static int pad_es_button_id(const char *name, char *buf, size_t cap)
+{
+    FILE *fp = fopen(PAD_ES_INPUT_CFG, "r");
+    if (!fp) return -1;
+    char line[512];
+    int found = -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (!strstr(line, "type=\"button\"")) continue;
+        /* 键名必须精确匹配 name="Xxx" */
+        char pat[96];
+        snprintf(pat, sizeof(pat), "name=\"%s\"", name);
+        const char *q = strstr(line, pat);
+        if (!q) continue;
+        /* 同一行里找 id="N" */
+        const char *id = strstr(q, "id=\"");
+        if (!id) continue;
+        id += 4;
+        int v = atoi(id);
+        if (v >= 0) { found = v; break; }
+    }
+    fclose(fp);
+    if (found < 0) return -1;
+    snprintf(buf, cap, "b%d", found);
+    return found;
+}
+
+/* 把 map 里缺的关键键补上。返回补了几个。 */
+static int pad_fill_missing(char *map, size_t cap)
+{
+    /* 键名 → SDL 认的字符串值。值优先从 es_input.cfg 读，读不到用默认。 */
+    static const struct { const char *key; const char *es; const char *fallback; }
+    NEED[] = {
+        { "start", "start",  "b13" },
+        { "back",  "select", "b12" },
+    };
+    int n = 0;
+    for (unsigned i = 0; i < sizeof(NEED) / sizeof(NEED[0]); i++) {
+        if (pad_has_key(map, NEED[i].key)) continue;      /* 已有，不动 */
+
+        char v[16] = { 0 };
+        if (pad_es_button_id(NEED[i].es, v, sizeof(v)) < 0)
+            snprintf(v, sizeof(v), "%s", NEED[i].fallback);
+
+        size_t ml = strlen(map);
+        int w = snprintf(map + ml, cap > ml ? cap - ml : 0,
+                         ",%s:%s", NEED[i].key, v);
+        if (w <= 0 || (size_t)w >= (cap > ml ? cap - ml : 0)) {
+            map[ml] = '\0';                              /* 放不下就还原 */
+            break;
+        }
+        printf("[pad] 基础映射缺 %s，按原厂 es_input.cfg 补成 %s:%s\n",
+               NEED[i].key, NEED[i].key, v);
+        n++;
+    }
+    return n;
+}
+
 /* 把映射串里 `a:<x>` 与 `b:<y>` 的值对调，结果写进 dst。
    映射串形如 guid,name,key:val,key:val,...（第一段 GUID、第二段名字）。
    返回 1 = 两个字段都找到且换过了；0 = 没找全（此时 dst 仍是原串副本）。 */
@@ -12095,6 +12246,10 @@ static void pad_add_mapping(void)
                      gs);
             printf("[pad] 警告：SDL 未提供基础映射，用内置兜底表（%s）\n", gs);
         }
+
+        /* SDL 自带表可能只给了一部分键（这台 R36hProMax 就是 start/back
+           全缺），缺一个就补一个 —— 补值优先问原厂 es_input.cfg。 */
+        pad_fill_missing(map, sizeof(map));
 
         if (SDL_GameControllerAddMapping(map) < 0) {
             printf("[pad] 追加映射失败: %s\n", SDL_GetError());
@@ -12596,6 +12751,20 @@ int main(int argc, char **argv)
            dm.w, dm.h, g_phys_w, g_phys_h, g_win_w, g_win_h, g_rot);
 
     g_scale = (float)g_win_w / (float)DESIGN_W;
+
+    /* 硬件能力探测 + 设置页按机型裁剪（2026-09-21，为 RK3326 移植加）。
+       放在这里：屏幕尺寸已定、bake_all() 还没跑，设置页任何入口都还没画。
+       ★ 摇杆灯入口是 IT_DISP 的最后一项，没有 aw20036 就把它藏掉。 */
+    hw_probe();
+    {
+        int want = IT_DISP_N;
+        if (!hw_has_led()) want -= 1;          /* 藏掉「摇杆灯」 */
+        if (want < 0) want = 0;
+        MENUS[M_DISP].n = want;
+        if (want != IT_DISP_N)
+            printf("设置页: 「显示」藏掉 %d 项（无摇杆灯硬件），实显 %d 项\n",
+                   IT_DISP_N - want, want);
+    }
 
     /* 封面/图标缩放用线性过滤：默认的最近邻在"正方形"这类卡片尺寸下
        会把封面缩出一身锯齿，远处看着像花了。Mali-G31 上线性采样的开销
